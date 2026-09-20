@@ -1,15 +1,16 @@
-# OpsContinuum Chart Quick Start (Rancher Desktop)
+# OpsContinuum Chart quick start (Rancher Desktop)
 
 Commands to deploy the OpsContinuum chart on a fresh Rancher Desktop cluster.
 
-> **Important**: The GitRepository and Kustomization resources must be named `opsc` exactly, as the HelmRelease references this name in its sourceRef.
+The GitRepository and Kustomization resources must be named `opsc` exactly,
+because the HelmRelease references this name in its `sourceRef`.
 
 ## Prerequisites
 
 - Rancher Desktop with Kubernetes enabled
-- kubectl configured
+- `kubectl` configured
 
-## Step 1: Install FluxCD
+## Step 1: install FluxCD
 
 ```bash
 kubectl apply -f https://github.com/fluxcd/flux2/releases/latest/download/install.yaml
@@ -19,13 +20,13 @@ kubectl -n flux-system rollout status deployment/helm-controller
 kubectl -n flux-system rollout status deployment/source-controller
 ```
 
-## Step 2: Install ECK CRDs
+## Step 2: install the ECK CRDs
 
 ```bash
 kubectl create -f https://download.elastic.co/downloads/eck/3.2.0/crds.yaml
 ```
 
-## Step 3: Create GitRepository
+## Step 3: create the GitRepository
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -42,7 +43,7 @@ spec:
 EOF
 ```
 
-## Step 4: Create Kustomization (Rancher Desktop)
+## Step 4: create the Kustomization (Rancher Desktop)
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -61,7 +62,7 @@ spec:
 EOF
 ```
 
-## Step 5: Monitor Deployment
+## Step 5: monitor the deployment
 
 ```bash
 # Watch HelmReleases
@@ -75,7 +76,7 @@ kubectl annotate gitrepository opsc -n flux-system \
   reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
 ```
 
-## Step 6: Add Hosts Entries
+## Step 6: add hosts entries
 
 Add to `C:\Windows\System32\drivers\etc\hosts` (run Notepad as Administrator):
 
@@ -89,16 +90,16 @@ Add to `C:\Windows\System32\drivers\etc\hosts` (run Notepad as Administrator):
 127.0.0.1 kibana.dev.yourdomain.local
 ```
 
-## Step 7: Access Services
+## Step 7: access the services
 
 | Service | URL |
 |---------|-----|
-| ArgoCD | https://argocd.dev.yourdomain.local |
+| Argo CD | https://argocd.dev.yourdomain.local |
 | GitLab | https://gitlab.dev.yourdomain.local |
 | Kibana | https://kibana.dev.yourdomain.local |
 | n8n | https://n8n.dev.yourdomain.local |
 
-### Get Credentials
+### Get credentials
 
 ```bash
 # ArgoCD admin password
@@ -116,18 +117,20 @@ kubectl -n elastic-stack get secret elasticsearch-es-elastic-user \
 
 ## Troubleshooting
 
-### OpsContinuum HelmRelease Fails on First Install
+### The OpsContinuum HelmRelease fails on first install
 
-The `opsc` HelmRelease may fail on initial deployment with an error about `Certificate` resources not found. This occurs because cert-manager CRDs are not yet available when the chart tries to create Certificate resources.
+The `opsc` HelmRelease may fail on initial deployment with an error about
+`Certificate` resources not found. cert-manager's CRDs are not yet available
+when the chart tries to create Certificate resources.
 
-**Solution**: Wait for cert-manager to fully deploy, then force a retry:
+Wait for cert-manager to deploy fully, then force a retry:
 
 ```bash
 kubectl annotate helmrelease opsc -n flux-system \
   reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
 ```
 
-### Force HelmRelease Retry
+### Force a HelmRelease retry
 
 If a HelmRelease fails, force a retry:
 
@@ -136,32 +139,35 @@ kubectl annotate helmrelease <name> -n flux-system \
   reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
 ```
 
-### HelmRelease Stuck at Retry Limit
+### HelmRelease stuck at the retry limit
 
-If a HelmRelease has exhausted its retry attempts and won't reconcile, suspend and resume it:
+If a HelmRelease has exhausted its retry attempts and will not reconcile,
+suspend and resume it:
 
 ```bash
 kubectl patch helmrelease <name> -n flux-system --type=merge -p '{"spec":{"suspend":true}}'
 kubectl patch helmrelease <name> -n flux-system --type=merge -p '{"spec":{"suspend":false}}'
 ```
 
-### Check HelmRelease Status
+### Check HelmRelease status
 
 ```bash
 kubectl get helmrelease -A
 kubectl describe helmrelease <name> -n flux-system
 ```
 
-### Check Flux Logs
+### Check Flux logs
 
 ```bash
 kubectl logs -n flux-system deployment/helm-controller --tail=50
 kubectl logs -n flux-system deployment/kustomize-controller --tail=50
 ```
 
-### GitLab Runner Registration
+### GitLab Runner registration
 
-The GitLab Runner pod may show registration errors until GitLab is fully operational. The runner will automatically retry registration. If issues persist, check the runner logs:
+The GitLab Runner pod may show registration errors until GitLab is fully up.
+The runner retries registration on its own. If the errors persist, check the
+runner logs:
 
 ```bash
 kubectl logs -n gitlab-runner -l app=gitlab-runner --tail=50

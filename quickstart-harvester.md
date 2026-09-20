@@ -1,31 +1,35 @@
-# Harvester Cluster Deployment Guide
+# Harvester cluster deployment guide
 
-This document explains how to deploy the OpsContinuum chart on a Harvester cluster. Harvester has some unique characteristics that require additional configuration compared to Rancher Desktop or standard k3s clusters.
+How to deploy the OpsContinuum chart on a Harvester cluster. Harvester differs
+from Rancher Desktop and standard k3s clusters in ways that need extra
+configuration.
 
-## Harvester-Specific Considerations
+## Harvester-specific considerations
 
-Harvester clusters come with pre-installed components that affect this deployment:
+Harvester clusters come with pre-installed components that affect this
+deployment:
 
-1. **nginx-ingress**: Harvester uses nginx-ingress for its management UI, bound to ports 80/443
-2. **No LoadBalancer support**: Bare-metal Harvester doesn't have cloud LoadBalancer support by default
-3. **RKE2 base**: Uses RKE2 which includes its own set of Helm charts in kube-system
+1. nginx-ingress: Harvester uses it for the management UI, bound to ports 80/443.
+2. No LoadBalancer support: bare-metal Harvester has no cloud LoadBalancer by default.
+3. RKE2 base: Harvester runs on RKE2, which ships its own set of Helm charts in `kube-system`.
 
-### Components Enabled for Harvester (not needed for Rancher Desktop)
+### Components enabled for Harvester (not needed for Rancher Desktop)
 
-| Component | Why Needed for Harvester |
-|-----------|-------------------------|
-| **MetalLB** | Provides LoadBalancer service support for bare-metal clusters |
-| **Traefik** | Separate ingress controller to avoid port conflicts with Harvester's nginx |
+| Component | Why Harvester needs it |
+|-----------|------------------------|
+| MetalLB | Provides LoadBalancer service support for bare-metal clusters |
+| Traefik | A separate ingress controller, to avoid port conflicts with Harvester's nginx |
 
-For **Rancher Desktop** or **k3s** with built-in Traefik, you can leave these disabled.
+On Rancher Desktop or k3s with built-in Traefik, leave both disabled.
 
 ---
 
-## Pre-Deployment Steps
+## Pre-deployment steps
 
 ### 1. Configure kubeconfig
 
-After Harvester installation, download the kubeconfig from the Harvester UI and configure it:
+After Harvester installation, download the kubeconfig from the Harvester UI and
+configure it:
 
 ```bash
 # Copy the downloaded kubeconfig
@@ -49,9 +53,9 @@ kubectl -n flux-system rollout status deployment/helm-controller
 kubectl -n flux-system rollout status deployment/source-controller
 ```
 
-### 3. Install Required CRDs
+### 3. Install the required CRDs
 
-The chart uses CRDs that must be installed before the chart can deploy:
+The chart uses CRDs that must exist before the chart can deploy:
 
 ```bash
 # ECK Operator CRDs (for Elasticsearch/Kibana)
@@ -65,7 +69,7 @@ kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/confi
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/crd/bases/metallb.io_l2advertisements.yaml
 ```
 
-### 4. Create Required Secrets
+### 4. Create the required secrets
 
 ```bash
 # Create cert-manager namespace
@@ -79,11 +83,12 @@ kubectl create secret generic cloudflare-api-token \
 
 ---
 
-## Chart Configuration for Harvester
+## Chart configuration for Harvester
 
-### values.yaml Changes
+### values.yaml changes
 
-Enable MetalLB and Traefik in your overlay's `helmrelease-patch.yaml` (`overlays/harvester/helmrelease-patch.yaml`):
+Enable MetalLB and Traefik in your overlay's `helmrelease-patch.yaml`
+(`overlays/harvester/helmrelease-patch.yaml`):
 
 ```yaml
 # Enable Traefik with LoadBalancer mode (not hostNetwork to avoid port conflicts)
@@ -105,15 +110,20 @@ metallb:
     addresses: ["192.168.1.240-192.168.1.250"]  # Replace with your network's available IPs
 ```
 
-**Important**: Harvester's `ingress-expose` service (for the management UI) is a LoadBalancer type and will claim an IP from the MetalLB pool. Make sure to allocate at least 2 IPs so Traefik can get one.
+Harvester's `ingress-expose` service (for the management UI) is a LoadBalancer
+type and claims an IP from the MetalLB pool. Allocate at least 2 IPs so Traefik
+can get one.
 
-Remember to also set `domain`, `certManager.acmeEmail`, and the `gitlab.postgresqlPassword` / `gitlab.postgresqlPostgresPassword` / `gitlab.redisPassword` values described in the top-level README before deploying; the chart will not render without them.
+Also set `domain`, `certManager.acmeEmail`, and the
+`gitlab.postgresqlPassword` / `gitlab.postgresqlPostgresPassword` /
+`gitlab.redisPassword` values described in the top-level README before
+deploying. The chart does not render without them.
 
 ---
 
-## Deployment Steps
+## Deployment steps
 
-### 1. Create Git Authentication Secret (for private repos)
+### 1. Create the git authentication secret (for private repos)
 
 ```bash
 kubectl create secret generic opsc-git-auth \
@@ -122,7 +132,7 @@ kubectl create secret generic opsc-git-auth \
   --from-literal=password=YOUR_GIT_PAT
 ```
 
-### 2. Create GitRepository
+### 2. Create the GitRepository
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -141,7 +151,7 @@ spec:
 EOF
 ```
 
-### 3. Create HelmRelease
+### 3. Create the HelmRelease
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -172,7 +182,7 @@ spec:
 EOF
 ```
 
-### 4. Monitor Deployment
+### 4. Monitor the deployment
 
 ```bash
 # Watch HelmReleases
@@ -188,9 +198,9 @@ kubectl annotate gitrepository opsc -n flux-system \
 
 ---
 
-## Post-Deployment Configuration
+## Post-deployment configuration
 
-### Check Service IPs
+### Check service IPs
 
 ```bash
 # Verify Traefik got a LoadBalancer IP
@@ -203,9 +213,10 @@ kubectl get svc -n traefik
 kubectl get ipaddresspool -n metallb-system
 ```
 
-### Configure DNS or Hosts File
+### Configure DNS or the hosts file
 
-Point your domain names to Traefik's LoadBalancer IP (illustrative example: `192.168.1.241`):
+Point your domain names to Traefik's LoadBalancer IP (illustrative example:
+`192.168.1.241`):
 
 ```
 192.168.1.241 argocd.yourdomain.local
@@ -214,13 +225,14 @@ Point your domain names to Traefik's LoadBalancer IP (illustrative example: `192
 192.168.1.241 kibana.yourdomain.local
 ```
 
-Or configure proper DNS A records if using a real domain with Let's Encrypt.
+Or configure proper DNS A records if you use a real domain with Let's
+Encrypt.
 
 ---
 
 ## Troubleshooting
 
-### Namespace Stuck in Terminating
+### Namespace stuck in Terminating
 
 If namespaces get stuck during cleanup, check for resources with finalizers:
 
@@ -232,7 +244,7 @@ kubectl get challenges.acme.cert-manager.io -n <namespace> -o name | \
   xargs -r kubectl patch -n <namespace> -p '{"metadata":{"finalizers":null}}' --type=merge
 ```
 
-### MetalLB Not Assigning IPs
+### MetalLB not assigning IPs
 
 Check the controller logs:
 
@@ -240,55 +252,62 @@ Check the controller logs:
 kubectl logs -n metallb-system -l app.kubernetes.io/component=controller
 ```
 
-Common issues:
-- IP range exhausted (Harvester's ingress-expose claims one)
+Common causes:
+
+- IP range exhausted (Harvester's `ingress-expose` claims one)
 - IPAddressPool or L2Advertisement CRDs not installed
 
-### Traefik Service Pending
+### Traefik service pending
 
 If Traefik's LoadBalancer IP shows `<pending>`:
 
-1. Ensure MetalLB is running: `kubectl get pods -n metallb-system`
-2. Check IPAddressPool exists: `kubectl get ipaddresspool -n metallb-system`
-3. Verify L2Advertisement exists: `kubectl get l2advertisement -n metallb-system`
+1. Check MetalLB is running: `kubectl get pods -n metallb-system`
+2. Check the IPAddressPool exists: `kubectl get ipaddresspool -n metallb-system`
+3. Check the L2Advertisement exists: `kubectl get l2advertisement -n metallb-system`
 
 ---
 
-## Architecture Summary
+## Architecture summary
 
-```
-Harvester Cluster (illustrative: 192.168.1.1 - management VIP)
-├── kube-system
-│   └── rke2-ingress-nginx (ports 80/443 on node, LoadBalancer for Harvester admin)
-│
-├── metallb-system
-│   └── MetalLB (manages your chosen IP pool, e.g. 192.168.1.240-192.168.1.250)
-│
-├── traefik
-│   └── Traefik (LoadBalancer, gets one IP from the MetalLB pool)
-│       ├── IngressRoutes for argocd, gitlab, n8n, kibana
-│       └── TLS via cert-manager
-│
-├── cert-manager (Let's Encrypt via Cloudflare DNS-01)
-├── argocd
-├── gitlab
-├── gitlab-runner
-├── n8n
-├── elastic-stack (elasticsearch, kibana, fleet, apm)
-└── opentelemetry-operator-system
+```mermaid
+flowchart TD
+    subgraph HV["Harvester cluster (illustrative management VIP 192.168.1.1)"]
+        subgraph KS[kube-system]
+            NGINX["rke2-ingress-nginx<br/>ports 80/443 on the node; LoadBalancer for Harvester admin"]
+        end
+        subgraph ML[metallb-system]
+            MLB["MetalLB<br/>manages your chosen IP pool, e.g. 192.168.1.240-192.168.1.250"]
+        end
+        subgraph TR[traefik]
+            TRF["Traefik (LoadBalancer)<br/>one IP from the MetalLB pool"]
+            IR["IngressRoutes for argocd, gitlab, n8n, kibana"]
+            TLS["TLS via cert-manager"]
+        end
+        CM["cert-manager<br/>Let's Encrypt via Cloudflare DNS-01"]
+        ARGO[argocd]
+        GL[gitlab]
+        GLR[gitlab-runner]
+        N8N[n8n]
+        ES["elastic-stack<br/>elasticsearch, kibana, fleet, apm"]
+        OT[opentelemetry-operator-system]
+    end
+    MLB --> TRF
+    TRF --> IR
+    TRF --> TLS
+    CM --> TLS
 ```
 
 ---
 
-## Summary of Harvester-Specific Steps
+## Summary of Harvester-specific steps
 
-1. Install FluxCD
-2. Install ECK CRDs (for Elasticsearch)
-3. Install Traefik CRDs (for IngressRoute)
-4. Install MetalLB CRDs (for IPAddressPool)
-5. Create Cloudflare API token secret
-6. Enable MetalLB with an IP range (2+ IPs, since Harvester's ingress-expose claims one)
-7. Enable Traefik with LoadBalancer mode (not hostNetwork)
-8. Set `domain`, `certManager.acmeEmail`, and the GitLab PostgreSQL/Redis passwords (required, see README)
-9. Create the FluxCD GitRepository and HelmRelease, both named `opsc`
-10. Configure DNS/hosts to point to Traefik's LoadBalancer IP
+1. Install FluxCD.
+2. Install the ECK CRDs (for Elasticsearch).
+3. Install the Traefik CRDs (for IngressRoute).
+4. Install the MetalLB CRDs (for IPAddressPool).
+5. Create the Cloudflare API token secret.
+6. Enable MetalLB with an IP range (2+ IPs, since Harvester's `ingress-expose` claims one).
+7. Enable Traefik in LoadBalancer mode (not hostNetwork).
+8. Set `domain`, `certManager.acmeEmail`, and the GitLab PostgreSQL/Redis passwords (required, see README).
+9. Create the FluxCD GitRepository and HelmRelease, both named `opsc`.
+10. Configure DNS or the hosts file to point at Traefik's LoadBalancer IP.
