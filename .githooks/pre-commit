@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Pre-commit guardrail: refuses a commit whose STAGED changes add what looks
+# like a real email address, or any of your own banned identifiers (real
+# domain, registry host, node/cluster names, once you have listed them).
+#
+# THIS IS A GUARDRAIL, NOT ENFORCEMENT. `git commit --no-verify` bypasses it,
+# the same as any git hook. It exists to catch an accidental paste, not to
+# stop someone determined to leak something. Do not rely on it as your only
+# line of defence before a push.
+#
+# Install with (run once per clone):
+#     git config core.hooksPath .githooks
+# =============================================================================
+
+set -euo pipefail
+
+fail=0
+repo_root="$(git rev-parse --show-toplevel)"
+
+# Only ADDED lines from the staged diff, so this hook only ever objects to
+# content you are about to introduce, never to context or removed lines.
+staged_diff="$(git diff --cached -U0 2>/dev/null || true)"
+added_lines="$(printf '%s\n' "$staged_diff" | grep -E '^\+' | grep -Ev '^\+\+\+' || true)"
+
+# ---- 1. Email addresses, excluding documentation-safe placeholder domains --
+# RFC 2606 reserves example.com/.net/.org and the .test/.example/.invalid
+# names for documentation. This repository also uses .local and .localhost
+# as placeholder domains throughout its own committed examples, so those are
+# allowed too. Anything else that looks like an email address is refused.
+safe_email_domain_re='(^|\.)(example\.(com|net|org)|test|invalid|local|localhost|example)$'
+
+email_hits="$(printf '%s\n' "$added_lines" | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' || true)"
+if [ -n "$email_hits" ]; then
+    while IFS= read -r addr; do
+        [ -z "$addr" ] && continue
+        domain_lc="$(printf '%s' "${addr#*@}" | tr '[:upper:]' '[:lower:]')"
+        if ! printf '%s' "$domain_lc" | grep -Eq "$safe_email_domain_re"; then
+            echo "pre-commit: refusing to commit: staged content adds an email address that is not a documentation placeholder: $addr" >&2
+            fail=1
+        fi
+    done <<EMAILS
+$email_hits
+EMAILS
+fi
+
+# ---- 2. Your own banned identifiers ----------------------------------------
+# Real domain, real registry host, real node/cluster names: list them, one
+# per line, in .githooks/banned-identifiers.local.txt (gitignored, never
+# committed). # starts a comment; blank lines are ignored. See
+# .githooks/banned-identifiers.local.txt.example for the format.
+banned_file="$repo_root/.githooks/banned-identifiers.local.txt"
+if [ -f "$banned_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        pattern="${line%%#*}"
+        pattern="$(printf '%s' "$pattern" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+        [ -z "$pattern" ] && continue
+        if printf '%s\n' "$added_lines" | grep -qF -- "$pattern"; then
+            echo "pre-commit: refusing to commit: staged content contains a banned identifier from .githooks/banned-identifiers.local.txt: $pattern" >&2
+            fail=1
+        fi
+    done < "$banned_file"
+fi
+
+if [ "$fail" -ne 0 ]; then
+    echo "pre-commit: commit blocked. Remove the real value from what you staged, or move it to your gitignored local overlay. If this is a genuine false positive, git commit --no-verify bypasses this hook, but only use that once you are certain." >&2
+    exit 1
+fi
+
+exit 0

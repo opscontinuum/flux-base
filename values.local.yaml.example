@@ -1,0 +1,43 @@
+# =============================================================================
+# EXAMPLE ONLY. This file is committed to a public repository.
+#
+# Copy it to a gitignored file before editing:
+#
+#     cp values.local.yaml.example values.local.yaml
+#     # or, per environment:
+#     cp values.local.yaml.example overlays/<your-environment>/values.local.yaml
+#
+# Then put YOUR real domain and YOUR real ACME contact email in the copy,
+# never in this file and never in any file this repository tracks. Both
+# `values.local.yaml` and any `overlays/*/values.local.yaml` are gitignored
+# (see .gitignore), but a gitignore rule only works if you keep the real
+# file under one of the ignored names. Renaming it, or pasting real values
+# into a tracked file "just for a moment", puts them in git history the
+# instant you commit, and this repository is public.
+#
+# No value below is real. Every one is a placeholder.
+# =============================================================================
+
+# The base domain for every ingress host this chart creates.
+domain: your-real-domain.example
+
+certManager:
+  # Contact email for the Let's Encrypt ACME account and the Cloudflare
+  # DNS-01 solver. Required; the chart's `required()` guard fails the
+  # render loudly if this is left empty.
+  acmeEmail: you@your-real-domain.example
+
+# Only needed if you pull images from a private registry. Leave every
+# field empty (as in base/chart/values.yaml) for public images.
+registryCredentials:
+  registry: registry.your-real-domain.example
+  username: your-registry-username
+  password: "<output of: openssl rand -base64 24, or your registry's issued token>"
+  email: you@your-real-domain.example
+
+gitlab:
+  # Generate each of these independently:
+  #   openssl rand -base64 24
+  postgresqlPassword: "<generated password>"
+  postgresqlPostgresPassword: "<generated password>"
+  redisPassword: "<generated password>"

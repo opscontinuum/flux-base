@@ -1,5 +1,14 @@
 # OpsContinuum Chart
 
+🔴 **This repository is public.** Your real domain, your real ACME contact
+email, your real registry credentials and the passwords for the bundled
+GitLab PostgreSQL and Redis instances go in a gitignored local overlay only
+(`values.local.yaml`, or `overlays/<env>/values.local.yaml`) and are never
+committed here, to this repository or to any fork of it. Start from
+`values.local.yaml.example`. See "Setting real values locally" below for the
+exact mechanism, and consider enabling the pre-commit guardrail described
+there too.
+
 A curated Kubernetes platform deployment using GitOps (FluxCD) that includes:
 
 - **Cert-Manager** - TLS certificate management
@@ -467,25 +476,27 @@ kubectl -n elastic-stack get secret elasticsearch-es-elastic-user \
 ## Setting real values locally
 
 **⚠️ WARNING: this repository is public. Your real domain, your real ACME contact
-email, and the passwords for the bundled GitLab PostgreSQL and Redis instances are
-real values that must never be committed or pushed here, to this repository or to
-any fork of it.**
+email, your real registry credentials, and the passwords for the bundled GitLab
+PostgreSQL and Redis instances are real values that must never be committed or
+pushed here, to this repository or to any fork of it. They go in a gitignored
+local overlay only, as an instruction, not a suggestion.**
 
-For local rendering and testing (`helm template`, `helm lint`) before you configure
-your actual deployment, create a gitignored file, for example
-`overlays/<your-environment>/values.local.yaml`:
+Copy the committed example to a gitignored file, either at the repository root
+or per environment, and fill in your own values:
 
-```yaml
-domain: your-real-domain.example
-certManager:
-  acmeEmail: you@your-real-domain.example
-gitlab:
-  postgresqlPassword: "<output of: openssl rand -base64 24>"
-  postgresqlPostgresPassword: "<output of: openssl rand -base64 24>"
-  redisPassword: "<output of: openssl rand -base64 24>"
+```bash
+cp values.local.yaml.example values.local.yaml
+# or:
+cp values.local.yaml.example overlays/<your-environment>/values.local.yaml
 ```
 
-Render locally with:
+`values.local.yaml.example` documents every field, including the optional
+`registryCredentials` block for private registries. `values.local.yaml` and
+every variation `.gitignore` lists (`.yml`, hyphenated, `.bak`) are already
+excluded, at any path. Do not rename it to something `.gitignore` does not
+list, or the exclusion stops applying.
+
+Render locally with (`helm template`, `helm lint`; contacts nothing):
 
 ```bash
 helm template ./base/chart \
@@ -493,10 +504,48 @@ helm template ./base/chart \
   -f overlays/<your-environment>/values.local.yaml
 ```
 
-`values.local.yaml` and any `*.local.yaml` file are already excluded by
-`.gitignore`. If your real GitOps deployment needs these values committed
-somewhere for Flux to read, keep that in a **separate, private** repository, or
-in a Kubernetes Secret referenced by your overlay, never in this public tree.
+For a real deployment straight from Helm, bypassing Flux (Flux itself reads
+only from git, so a gitignored file cannot reach it: see the note below):
+
+```bash
+helm upgrade --install opsc ./base/chart \
+  -f overlays/<your-environment>/values-patch.yaml \
+  -f overlays/<your-environment>/values.local.yaml \
+  --namespace flux-system --create-namespace
+```
+
+To review, offline, exactly what the kustomize overlay for an environment
+resolves to, before FluxCD or a human ever applies it (renders locally,
+contacts no cluster):
+
+```bash
+kubectl kustomize overlays/<your-environment>
+```
+
+If your real GitOps deployment needs these values committed somewhere for
+Flux to read, keep that in a **separate, private** repository, or in a
+Kubernetes Secret referenced by your overlay, never in this public tree.
+
+### Guardrail: a pre-commit hook
+
+A committed hook refuses a commit whose staged changes add what looks like a
+real email address, or any identifier you have listed as your own. It is a
+guardrail, not enforcement: `git commit --no-verify` bypasses it, the same as
+any git hook. It catches an accidental paste, not a determined leak.
+
+Install it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Optionally, list your own real domain, registry host, and node or cluster
+names for it to also check for:
+
+```bash
+cp .githooks/banned-identifiers.local.txt.example .githooks/banned-identifiers.local.txt
+# then edit it, one identifier per line
+```
 
 ---
 

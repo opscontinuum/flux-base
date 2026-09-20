@@ -1,11 +1,31 @@
 # =============================================================================
 # NEVER COMMIT REAL VALUES. This chart is public. Real domains, ACME contact
-# emails, and generated passwords belong in a gitignored *.local.yaml file,
-# not in this tree. See README.md, "Setting real values locally".
+# emails, registry credentials, and generated passwords belong in a
+# gitignored *.local.yaml file, not in this tree. See README.md, "Setting
+# real values locally". The patterns below cover the canonical filename and
+# the obvious ways to mistype it; if you invent a new name for your local
+# file, it will NOT be ignored automatically, so keep to one of these.
 # =============================================================================
 values.local.yaml
+values.local.yml
+values-local.yaml
+values.local.yaml.bak
 overlays/*/values.local.yaml
+overlays/*/values.local.yml
+overlays/*/values-local.yaml
 *.local.yaml
+*.local.yml
+
+# Never committed at any path, by name or by extension variant above.
+# .example files are placeholders and are deliberately NOT matched by the
+# patterns above (they end in .example, not .yaml/.yml), so they stay tracked.
+
+# =============================================================================
+# Pre-commit hook config: your own list of banned identifiers (real domain,
+# registry host, node/cluster names). See .githooks/pre-commit and
+# .githooks/banned-identifiers.local.txt.example.
+# =============================================================================
+.githooks/banned-identifiers.local.txt
 
 # Claude Code workspace
 .claude/

@@ -1,0 +1,21 @@
+# =============================================================================
+# EXAMPLE ONLY. This file is committed to a public repository, as a template.
+#
+# Copy it to the real, gitignored file before editing:
+#
+#     cp .githooks/banned-identifiers.local.txt.example .githooks/banned-identifiers.local.txt
+#
+# Then list, one per line, the literal strings the pre-commit hook
+# (.githooks/pre-commit) should refuse to let you stage: your real domain,
+# your real registry hostname, your real node and cluster names, anything
+# else that identifies your deployment and must never reach this public
+# history. Comments start with #; blank lines are ignored.
+#
+# .githooks/banned-identifiers.local.txt is gitignored (see .gitignore).
+# This .example file is not: it contains no real value, only the format.
+# =============================================================================
+
+# your-real-domain.example
+# registry.your-real-domain.example
+# your-node-hostname
+# your-cluster-name
