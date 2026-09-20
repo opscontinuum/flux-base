@@ -289,10 +289,19 @@ certManager:
       publicKey: ""
       knownHosts: ""
 
+  # Pinned to v1.16.5, not upstream's latest: on at least one known deployment
+  # this is the version actually running in production today (confirmed by
+  # reading the live child HelmRelease's chart version directly), applied by
+  # hand outside this chart at some point after install. This chart's own
+  # default previously stayed at v1.16.2, so a values-only source change with
+  # no explicit pin would have silently downgraded the TLS issuer serving
+  # real traffic on that deployment's next reconcile. If you are pinning to a
+  # different cluster's real running version, update this - and the four
+  # image.tag values below - to match, not to whatever upstream ships next.
   helmRepo:
     repoName: jetstack
     chartName: cert-manager
-    tag: "v1.16.2"
+    tag: "v1.16.5"
     cosignVerify: false
 
   flux: {}
@@ -379,29 +388,50 @@ certManager:
       enabled: true
       keep: true
 
-    # Image configuration
+    # Image configuration. See the pin comment on certManager.helmRepo.tag
+    # above: keep this tag in sync with it, matching whatever version is
+    # actually running on your target cluster today, not upstream's latest.
     image:
       repository: quay.io/jetstack/cert-manager-controller
-      tag: v1.16.2
+      tag: v1.16.5
       pullPolicy: IfNotPresent
 
-    # Webhook
+    # Webhook. NOTE: `image` and `resources` were previously two separate
+    # `webhook:` keys in this file (same for `cainjector:` below) - a
+    # duplicate-mapping-key bug where the second occurrence silently
+    # discarded the first at parse time, so the `image.tag` pin below was
+    # never actually applied. Merged into one block per package so both
+    # halves take effect together.
     webhook:
       image:
         repository: quay.io/jetstack/cert-manager-webhook
-        tag: v1.16.2
+        tag: v1.16.5
+      resources:
+        limits:
+          cpu: 200m
+          memory: 128Mi
+        requests:
+          cpu: 20m
+          memory: 32Mi
 
     # CA Injector
     cainjector:
       image:
         repository: quay.io/jetstack/cert-manager-cainjector
-        tag: v1.16.2
+        tag: v1.16.5
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 20m
+          memory: 64Mi
 
     # Startup API check
     startupapicheck:
       image:
         repository: quay.io/jetstack/cert-manager-startupapicheck
-        tag: v1.16.2
+        tag: v1.16.5
 
     # Resources
     resources:
@@ -411,24 +441,6 @@ certManager:
       requests:
         cpu: 50m
         memory: 64Mi
-
-    webhook:
-      resources:
-        limits:
-          cpu: 200m
-          memory: 128Mi
-        requests:
-          cpu: 20m
-          memory: 32Mi
-
-    cainjector:
-      resources:
-        limits:
-          cpu: 200m
-          memory: 256Mi
-        requests:
-          cpu: 20m
-          memory: 64Mi
 
     # Prometheus monitoring
     prometheus:
@@ -498,6 +510,29 @@ eckOperator:
 # GitLab (DevOps Platform)
 # -----------------------------------------------------------------------------
 gitlab:
+  # -----------------------------------------------------------------------------
+  # LEFT ENABLED ON PURPOSE - UNRESOLVED, read this before touching this key.
+  # On at least one known deployment, a namespace literally named "gitlab"
+  # already exists on the cluster, owned by a separate GitOps controller (not
+  # this chart), holding a real GitLab instance with real project data and
+  # bound persistent volumes. This chart's own namespace/HelmRelease templates
+  # for this package use that exact same hardcoded name with no override key.
+  # Setting `enabled: false` here does NOT safely "undo" that collision: this
+  # object is still present in this release's own upgrade history, so on the
+  # next upgrade Helm's prune step would try to delete it by name - and Helm's
+  # prune path does not re-check live ownership annotations before deleting,
+  # unlike its create/update path. That means disabling this key can delete a
+  # namespace this chart does not actually own, taking its real data with it.
+  # Leaving it `true` isn't safe either (Helm will hit an ownership conflict
+  # trying to adopt the existing namespace on the next upgrade) - it is just
+  # the less destructive of two unsafe options: a failed upgrade, not a
+  # deletion. The only real fix is a one-time, out-of-band step on the
+  # cluster itself (annotate the existing namespace `helm.sh/resource-policy:
+  # keep` before ever letting this release's next upgrade see it as absent),
+  # which is out of scope for a values change in this chart. Do not flip this
+  # key in either direction without first confirming, on the specific cluster
+  # you are deploying to, who actually owns the "gitlab" namespace.
+  # -----------------------------------------------------------------------------
   enabled: true
 
   # -----------------------------------------------------------------------------
@@ -607,6 +642,15 @@ gitlab:
 # GitLab Runner
 # -----------------------------------------------------------------------------
 gitlabRunner:
+  # LEFT ENABLED ON PURPOSE - UNRESOLVED, same reasoning as gitlab.enabled
+  # above. On at least one known deployment, a namespace literally named
+  # "gitlab-runner" already exists, owned by a separate GitOps controller,
+  # running CI for that controller's own pipeline. Disabling this key would
+  # add this namespace's name to what this release prunes on its next
+  # upgrade, and Helm's prune path deletes by name without re-checking live
+  # ownership - so this can delete a namespace this chart does not actually
+  # own. Do not flip this key without first confirming who owns the
+  # "gitlab-runner" namespace on the target cluster.
   enabled: true
 
   sourceType: "helmRepo"
@@ -666,6 +710,21 @@ gitlabRunner:
 # ArgoCD (GitOps CD)
 # -----------------------------------------------------------------------------
 argocd:
+  # LEFT ENABLED ON PURPOSE - UNRESOLVED, same reasoning as gitlab.enabled
+  # above, and higher stakes: on at least one known deployment, a namespace
+  # literally named "argocd" already exists, running a separate, independent
+  # Argo CD control plane that itself manages dozens of production
+  # Applications (whose CRs live inside that same namespace). This chart's
+  # own namespace/HelmRelease templates for this package use that exact same
+  # hardcoded name with no override key. Disabling this key would add that
+  # namespace's name to what this release prunes on its next upgrade, and
+  # Helm's prune path deletes by name without re-checking live ownership -
+  # so this can delete another control plane's entire namespace, cascading
+  # to every Application CR (and, depending on that controller's finalizer
+  # settings, every resource those Applications manage) in one step. Leaving
+  # it `true` risks an ownership-conflict upgrade failure instead, which is
+  # the less destructive of the two. Do not flip this key without first
+  # confirming who owns the "argocd" namespace on the target cluster.
   enabled: true
 
   sourceType: "helmRepo"
@@ -763,7 +822,13 @@ argocd:
 # n8n (Workflow Automation)
 # -----------------------------------------------------------------------------
 n8n:
-  enabled: true
+  # Default disabled: on at least one known deployment this HelmRelease reports
+  # "deployed" while its target namespace does not exist on the cluster (no
+  # workload actually running). A green Flux condition here is not proof of a
+  # working install; verify the namespace and pods exist before flipping this
+  # back on, and do it as its own deliberate change, not bundled with a source
+  # migration or other unrelated chart update.
+  enabled: false
 
   sourceType: "helmRepo"
 
@@ -845,7 +910,15 @@ n8n:
 # -----------------------------------------------------------------------------
 # Uses ECK operator for deployment
 elasticStack:
-  enabled: true
+  # Default disabled: on at least one known deployment there is no
+  # "elastic-stack" namespace on the cluster at all, so nothing renders here
+  # today. A separate, independently-owned Elasticsearch+Kibana can exist
+  # under a *different* namespace name on the same cluster (e.g. run by
+  # another GitOps controller) - that is not this component, and turning
+  # this on does not touch it, but it does mean turning this on stands up a
+  # second, resource-heavy Elasticsearch (multi-GiB memory, tens of GiB
+  # storage) alongside it. Confirm real headroom exists before enabling.
+  enabled: false
   namespace: elastic-stack
 
   # Elastic Stack version
@@ -950,7 +1023,14 @@ elasticStack:
 # -----------------------------------------------------------------------------
 # Provides auto-instrumentation for application tracing via EDOT (Elastic Distribution of OpenTelemetry)
 opentelemetryOperator:
-  enabled: true
+  # Default disabled: on at least one known deployment this component's own
+  # namespace exists (created by this chart, carries this chart's ownership
+  # labels) but holds zero resources - no operator HelmRelease, no pods,
+  # nothing running. It is a leftover from an earlier config, not a live
+  # dependency of anything else in this chart today. Confirm a real workload
+  # would actually consume it (e.g. instrumentation.enabled traces) before
+  # turning it back on.
+  enabled: false
 
   sourceType: "helmRepo"
 
