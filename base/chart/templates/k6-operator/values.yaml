@@ -1,0 +1,31 @@
+{{- if .Values.k6Operator.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.k6Operator "name" "k6-operator" "defaults" (include "opsc.defaults.k6-operator" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.k6-operator" -}}
+# k6 Operator default values
+
+# Namespace configuration
+namespace:
+  create: false
+
+# Manager (controller) configuration
+manager:
+  image:
+    pullPolicy: {{ .Values.imagePullPolicy }}
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+{{- if (include "imagePullSecret" .) }}
+global:
+  image:
+    pullSecrets:
+      - private-registry
+{{- end }}
+
+{{- end -}}

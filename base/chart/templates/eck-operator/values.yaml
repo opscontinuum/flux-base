@@ -1,0 +1,42 @@
+{{- if .Values.eckOperator.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.eckOperator "name" "eck-operator" "defaults" (include "opsc.defaults.eck-operator" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.eck-operator" -}}
+# ECK Operator default values
+
+# Create CRDs
+createClusterScopedResources: true
+installCRDs: true
+
+# Operator configuration
+replicaCount: 1
+
+image:
+  repository: docker.elastic.co/eck/eck-operator
+  pullPolicy: {{ .Values.imagePullPolicy }}
+
+{{- if (include "imagePullSecret" .) }}
+imagePullSecrets:
+  - name: private-registry
+{{- end }}
+
+# Resources
+resources:
+  limits:
+    cpu: 1
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 150Mi
+
+# Webhook
+webhook:
+  enabled: true
+  manageCerts: true
+
+# Metrics
+telemetry:
+  disabled: false
+
+{{- end -}}

@@ -1,0 +1,60 @@
+# =============================================================================
+# RANCHER DESKTOP OVERLAY
+# =============================================================================
+# Local development environment using Rancher Desktop's built-in Traefik.
+# Optimized for single-node local development with reduced resource usage.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Global Configuration
+# -----------------------------------------------------------------------------
+domain: dev.yourdomain.local
+clusterIssuer: self-signed
+
+# -----------------------------------------------------------------------------
+# Ingress Controller
+# -----------------------------------------------------------------------------
+# Rancher Desktop includes Traefik by default - no need to deploy our own
+traefik:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# Load Balancer
+# -----------------------------------------------------------------------------
+# Not needed - Rancher Desktop uses hostNetwork for ingress
+metallb:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# Resource Limits (Lighter for Local Development)
+# -----------------------------------------------------------------------------
+elasticStack:
+  enabled: true
+  elasticsearch:
+    replicas: 1
+    storage: 5Gi
+    resources:
+      limits:
+        memory: 1Gi
+        cpu: 500m
+      requests:
+        memory: 512Mi
+        cpu: 250m
+  kibana:
+    replicas: 1
+    resources:
+      limits:
+        memory: 512Mi
+        cpu: 500m
+      requests:
+        memory: 256Mi
+        cpu: 100m
+
+gitlab:
+  enabled: true
+
+argocd:
+  enabled: true
+
+n8n:
+  enabled: true

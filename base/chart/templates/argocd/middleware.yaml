@@ -1,0 +1,14 @@
+{{- if and .Values.argocd.enabled (default true .Values.httpsRedirect) }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-to-https
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+{{- end }}

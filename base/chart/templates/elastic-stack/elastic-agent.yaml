@@ -1,0 +1,106 @@
+{{- if and .Values.elasticStack.enabled .Values.elasticStack.elasticAgent.enabled }}
+{{- $namespace := .Values.elasticStack.namespace | default "elastic-stack" }}
+apiVersion: agent.k8s.elastic.co/v1alpha1
+kind: Agent
+metadata:
+  name: elastic-agent
+  namespace: {{ $namespace }}
+  labels:
+    app.kubernetes.io/name: elastic-agent
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    description: "Elastic Agent DaemonSet for collecting container logs, metrics, and node data"
+spec:
+  version: {{ .Values.elasticStack.version | default "8.15.0" }}
+  {{- if .Values.elasticStack.elasticAgent.image }}
+  image: {{ .Values.elasticStack.elasticAgent.image }}
+  {{- end }}
+  kibanaRef:
+    name: {{ .Values.elasticStack.kibana.name | default "kibana" }}
+  fleetServerRef:
+    name: fleet-server
+  mode: fleet
+  policyID: kubernetes-policy
+  daemonSet:
+    podTemplate:
+      spec:
+        serviceAccountName: elastic-agent
+        automountServiceAccountToken: true
+        hostNetwork: true
+        dnsPolicy: ClusterFirstWithHostNet
+        dnsConfig:
+          searches:
+            - kube-system.svc.cluster.local
+            - svc.cluster.local
+            - cluster.local
+        securityContext:
+          runAsUser: 0
+        containers:
+          - name: agent
+            resources:
+              {{- if .Values.elasticStack.elasticAgent.resources }}
+              {{- toYaml .Values.elasticStack.elasticAgent.resources | nindent 14 }}
+              {{- else }}
+              limits:
+                memory: 512Mi
+                cpu: 500m
+              requests:
+                memory: 256Mi
+                cpu: 100m
+              {{- end }}
+            volumeMounts:
+              - name: proc
+                mountPath: /hostfs/proc
+                readOnly: true
+              - name: cgroup
+                mountPath: /hostfs/sys/fs/cgroup
+                readOnly: true
+              - name: varlibdockercontainers
+                mountPath: /var/lib/docker/containers
+                readOnly: true
+              - name: varlog
+                mountPath: /var/log
+                readOnly: true
+              - name: etc-full
+                mountPath: /hostfs/etc
+                readOnly: true
+              - name: var-lib
+                mountPath: /hostfs/var/lib
+                readOnly: true
+            env:
+              - name: NODE_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: spec.nodeName
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+        volumes:
+          - name: proc
+            hostPath:
+              path: /proc
+          - name: cgroup
+            hostPath:
+              path: /sys/fs/cgroup
+          - name: varlibdockercontainers
+            hostPath:
+              path: /var/lib/docker/containers
+          - name: varlog
+            hostPath:
+              path: /var/log
+          - name: etc-full
+            hostPath:
+              path: /etc
+          - name: var-lib
+            hostPath:
+              path: /var/lib
+        {{- if .Values.elasticStack.elasticAgent.tolerations }}
+        tolerations:
+          {{- toYaml .Values.elasticStack.elasticAgent.tolerations | nindent 10 }}
+        {{- else }}
+        tolerations:
+          - operator: Exists
+        {{- end }}
+{{- end }}

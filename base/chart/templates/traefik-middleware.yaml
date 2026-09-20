@@ -1,0 +1,15 @@
+{{/*
+Traefik Middleware for HTTPS redirect
+This middleware redirects all HTTP traffic to HTTPS
+*/}}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-to-https
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true

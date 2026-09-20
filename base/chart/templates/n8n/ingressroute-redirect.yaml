@@ -1,0 +1,23 @@
+{{- if and .Values.n8n.enabled (default true .Values.httpsRedirect) }}
+{{- $domainName := default .Values.domain .Values.hostname }}
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: n8n-http-redirect
+  namespace: n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`n8n.{{ $domainName }}`)
+      kind: Rule
+      middlewares:
+        - name: redirect-to-https
+          namespace: n8n
+      services:
+        - name: n8n
+          port: 5678
+{{- end }}

@@ -1,0 +1,59 @@
+{{- $fluxSettings := merge .Values.k6Operator.flux .Values.flux -}}
+{{- if .Values.k6Operator.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: k6-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: k6-operator
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/k6-operator/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: k6-operator-system
+  releaseName: k6-operator
+  chart:
+    spec:
+      {{- if eq .Values.k6Operator.sourceType "git" }}
+      chart: {{ .Values.k6Operator.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: k6-operator
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.k6Operator.helmRepo.chartName }}
+      version: {{ .Values.k6Operator.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.k6Operator.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.k6Operator.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.k6Operator.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.k6Operator.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.k6Operator.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.k6Operator.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-k6-operator-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-k6-operator-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-k6-operator-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}

@@ -1,0 +1,10 @@
+{{- if .Values.n8n.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+{{- end }}

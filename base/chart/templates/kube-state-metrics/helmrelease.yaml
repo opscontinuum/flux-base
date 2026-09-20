@@ -1,0 +1,59 @@
+{{- $fluxSettings := merge .Values.kubeStateMetrics.flux .Values.flux -}}
+{{- if .Values.kubeStateMetrics.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: kube-state-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/component: "monitoring"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/kube-state-metrics/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: kube-system
+  releaseName: kube-state-metrics
+  chart:
+    spec:
+      {{- if eq .Values.kubeStateMetrics.sourceType "git" }}
+      chart: {{ .Values.kubeStateMetrics.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: kube-state-metrics
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.kubeStateMetrics.helmRepo.chartName }}
+      version: {{ .Values.kubeStateMetrics.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.kubeStateMetrics.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.kubeStateMetrics.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.kubeStateMetrics.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.kubeStateMetrics.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.kubeStateMetrics.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.kubeStateMetrics.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-kube-state-metrics-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-kube-state-metrics-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-kube-state-metrics-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}

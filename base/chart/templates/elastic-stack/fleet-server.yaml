@@ -1,0 +1,56 @@
+{{- if and .Values.elasticStack.enabled .Values.elasticStack.fleetServer.enabled }}
+apiVersion: agent.k8s.elastic.co/v1alpha1
+kind: Agent
+metadata:
+  name: fleet-server
+  namespace: {{ .Values.elasticStack.namespace | default "elastic-stack" }}
+  labels:
+    app.kubernetes.io/name: fleet-server
+    app.kubernetes.io/component: "logging"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  version: {{ .Values.elasticStack.version | default "8.15.0" }}
+  {{- if .Values.elasticStack.fleetServer.image }}
+  image: {{ .Values.elasticStack.fleetServer.image }}
+  {{- end }}
+  kibanaRef:
+    name: {{ .Values.elasticStack.kibana.name | default "kibana" }}
+  elasticsearchRefs:
+    - name: {{ .Values.elasticStack.elasticsearch.name | default "elasticsearch" }}
+  mode: fleet
+  fleetServerEnabled: true
+  policyID: fleet-server-policy
+  deployment:
+    replicas: {{ .Values.elasticStack.fleetServer.replicas | default 1 }}
+    podTemplate:
+      spec:
+        serviceAccountName: elastic-agent
+        automountServiceAccountToken: true
+        securityContext:
+          runAsUser: 0
+        containers:
+          - name: agent
+            resources:
+              {{- if .Values.elasticStack.fleetServer.resources }}
+              {{- toYaml .Values.elasticStack.fleetServer.resources | nindent 14 }}
+              {{- else }}
+              limits:
+                memory: 512Mi
+                cpu: 500m
+              requests:
+                memory: 256Mi
+                cpu: 100m
+              {{- end }}
+        {{- if .Values.elasticStack.fleetServer.nodeSelector }}
+        nodeSelector:
+          {{- toYaml .Values.elasticStack.fleetServer.nodeSelector | nindent 10 }}
+        {{- end }}
+        {{- if .Values.elasticStack.fleetServer.tolerations }}
+        tolerations:
+          {{- toYaml .Values.elasticStack.fleetServer.tolerations | nindent 10 }}
+        {{- end }}
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: {{ .Values.elasticStack.fleetServer.disableTls | default false }}
+{{- end }}

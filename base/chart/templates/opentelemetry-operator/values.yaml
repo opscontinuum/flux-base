@@ -1,0 +1,69 @@
+{{- if .Values.opentelemetryOperator.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.opentelemetryOperator "name" "opentelemetry-operator" "defaults" (include "opsc.defaults.opentelemetryOperator" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.opentelemetryOperator" -}}
+# OpenTelemetry Operator default values
+
+# Manager configuration
+manager:
+  # Enable Go auto-instrumentation (experimental/alpha feature)
+  extraArgs:
+    - --enable-go-instrumentation=true
+  image:
+    repository: ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator
+  # Required: Collector image for OpenTelemetry Collector CRs
+  collectorImage:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.113.0"
+  # Required: Target allocator image
+  targetAllocatorImage:
+    repository: ghcr.io/open-telemetry/opentelemetry-operator/target-allocator
+    tag: "v0.105.0"
+  # Required: OpAMP bridge image (note: lowercase 'opamp')
+  opampBridgeImage:
+    repository: ghcr.io/open-telemetry/opentelemetry-operator/operator-opamp-bridge
+    tag: "v0.105.0"
+  # Auto-instrumentation images
+  autoInstrumentationImage:
+    java:
+      repository: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java
+      tag: "2.9.0"
+    nodejs:
+      repository: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-nodejs
+      tag: "0.53.0"
+    python:
+      repository: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-python
+      tag: "0.48b0"
+    dotnet:
+      repository: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-dotnet
+      tag: "1.2.0"
+    go:
+      repository: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-go
+      tag: "v0.14.0-alpha"
+    apacheHttpd:
+      repository: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-apache-httpd
+      tag: "1.0.4"
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Enable auto-instrumentation for supported languages
+# Note: For internal webhook certificates, always use the self-signed CA
+# Let's Encrypt cannot issue certs for .svc.cluster.local domains
+admissionWebhooks:
+  certManager:
+    enabled: true
+    issuerRef:
+      kind: ClusterIssuer
+      name: {{ .Values.certManager.clusterIssuers.selfSignedCA.name }}
+
+# Collector configuration (optional - we use Elastic APM directly)
+kubeRBACProxy:
+  enabled: false
+
+{{- end -}}

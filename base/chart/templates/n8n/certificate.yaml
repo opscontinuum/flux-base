@@ -1,0 +1,23 @@
+{{- if and .Values.n8n.enabled .Values.certManager.enabled }}
+{{- $domainName := default .Values.domain .Values.hostname }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: n8n-tls
+  namespace: n8n
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+spec:
+  secretName: n8n-tls
+  issuerRef:
+    name: {{ .Values.clusterIssuer | default .Values.certManager.clusterIssuers.selfSignedCA.name }}
+    kind: ClusterIssuer
+  commonName: n8n.{{ $domainName }}
+  dnsNames:
+    - n8n.{{ $domainName }}
+{{- end }}

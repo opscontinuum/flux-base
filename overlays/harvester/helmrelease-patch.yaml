@@ -1,0 +1,97 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: opsc
+  namespace: flux-system
+spec:
+  values:
+    # =============================================================================
+    # HARVESTER OVERLAY
+    # =============================================================================
+    # Harvester HCI cluster deployment.
+    #
+    # IMPORTANT: Harvester Architecture
+    # ----------------------------------
+    # Harvester uses a built-in nginx ingress controller on ports 80/443 for the
+    # Harvester admin UI. DO NOT replace or disable this nginx ingress - doing so
+    # will break the Harvester admin interface.
+    #
+    # This overlay deploys Traefik as a SECONDARY ingress controller that runs
+    # alongside nginx. Traefik gets its own IP address via MetalLB LoadBalancer,
+    # leaving nginx untouched on the node's primary IP.
+    # =============================================================================
+
+    # -----------------------------------------------------------------------------
+    # Global Configuration
+    # -----------------------------------------------------------------------------
+    # UPDATE: Set your domain
+    domain: yourdomain.local
+    clusterIssuer: self-signed    # Or letsencrypt-prod for real certificates
+
+    # -----------------------------------------------------------------------------
+    # Ingress Controller (Traefik - Secondary)
+    # -----------------------------------------------------------------------------
+    # Traefik runs as a SECONDARY ingress controller alongside Harvester's nginx.
+    # - nginx: Remains on node IP (ports 80/443) for Harvester admin UI
+    # - Traefik: Gets separate LoadBalancer IP from MetalLB for our applications
+    #
+    # DO NOT enable hostNetwork - this would conflict with nginx and break Harvester!
+    traefik:
+      enabled: true
+      hostNetwork:
+        enabled: false            # MUST be false - nginx uses host ports 80/443
+      service:
+        enabled: true
+        type: LoadBalancer        # Gets dedicated IP from MetalLB
+
+    # -----------------------------------------------------------------------------
+    # Load Balancer (MetalLB)
+    # -----------------------------------------------------------------------------
+    # MetalLB assigns a dedicated IP to Traefik's LoadBalancer service.
+    # This IP is separate from the Harvester node IP where nginx runs.
+    metallb:
+      enabled: true
+      addressPool:
+        name: default-pool
+        # UPDATE: Set your IP range from your network
+        # These IPs must be routable and not used by other services
+        # A single IP is sufficient (e.g., "192.168.1.240/32" or "192.168.1.240-192.168.1.240")
+        # A range provides flexibility for multiple LoadBalancer services
+        addresses:
+          - "192.168.1.240-192.168.1.250"
+
+    # -----------------------------------------------------------------------------
+    # Resource Limits (Production-ready)
+    # -----------------------------------------------------------------------------
+    elasticStack:
+      enabled: true
+      elasticsearch:
+        replicas: 1               # Increase to 3 for HA
+        storage: 50Gi
+        # Heap should be ~50% of memory limit (8Gi -> 4g heap)
+        javaOpts: "-Xms4g -Xmx4g"
+        resources:
+          limits:
+            memory: 8Gi
+            cpu: "4"
+          requests:
+            memory: 4Gi
+            cpu: "2"
+      kibana:
+        replicas: 1
+        resources:
+          limits:
+            memory: 2Gi
+            cpu: 1000m
+          requests:
+            memory: 1Gi
+            cpu: 500m
+
+    gitlab:
+      enabled: true
+
+    argocd:
+      enabled: true
+
+    n8n:
+      enabled: true

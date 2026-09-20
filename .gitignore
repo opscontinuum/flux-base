@@ -1,0 +1,29 @@
+# =============================================================================
+# NEVER COMMIT REAL VALUES. This chart is public. Real domains, ACME contact
+# emails, and generated passwords belong in a gitignored *.local.yaml file,
+# not in this tree. See README.md, "Setting real values locally".
+# =============================================================================
+values.local.yaml
+overlays/*/values.local.yaml
+*.local.yaml
+
+# Claude Code workspace
+.claude/
+
+# Helm build artifacts
+*.tgz
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml

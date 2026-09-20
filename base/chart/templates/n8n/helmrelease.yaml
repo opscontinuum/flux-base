@@ -1,0 +1,59 @@
+{{- $fluxSettings := merge .Values.n8n.flux .Values.flux -}}
+{{- if .Values.n8n.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: n8n
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: n8n
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/n8n/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: n8n
+  releaseName: n8n
+  chart:
+    spec:
+      {{- if eq .Values.n8n.sourceType "git" }}
+      chart: {{ .Values.n8n.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: n8n
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.n8n.helmRepo.chartName }}
+      version: {{ .Values.n8n.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.n8n.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.n8n.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.n8n.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.n8n.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.n8n.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.n8n.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-n8n-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-n8n-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-n8n-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}

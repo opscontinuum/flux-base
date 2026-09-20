@@ -1,0 +1,68 @@
+{{- if .Values.n8n.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.n8n "name" "n8n" "defaults" (include "opsc.defaults.n8n" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.n8n" -}}
+# n8n default values
+{{- $domainName := default .Values.domain .Values.hostname }}
+
+# Image configuration
+image:
+  repository: n8nio/n8n
+  pullPolicy: {{ .Values.imagePullPolicy }}
+
+{{- if (include "imagePullSecret" .) }}
+imagePullSecrets:
+  - name: private-registry
+{{- end }}
+
+# Resources
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Ingress
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  hosts:
+    - host: n8n.{{ $domainName }}
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: n8n-tls
+      hosts:
+        - n8n.{{ $domainName }}
+
+# Database configuration
+db:
+  type: sqlite
+  sqlite:
+    database: "database.sqlite"
+
+# Security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  privileged: false
+  runAsUser: 1000
+  runAsGroup: 1000
+
+# Pod security context
+podSecurityContext:
+  fsGroup: 1000
+  fsGroupChangePolicy: "OnRootMismatch"
+
+{{- end -}}

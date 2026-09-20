@@ -1,0 +1,23 @@
+{{- if and .Values.argocd.enabled (default true .Values.httpsRedirect) }}
+{{- $domainName := default .Values.domain .Values.hostname }}
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd-http-redirect
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`argocd.{{ $domainName }}`)
+      kind: Rule
+      middlewares:
+        - name: redirect-to-https
+          namespace: argocd
+      services:
+        - name: argocd-argocd-server
+          port: 80
+{{- end }}

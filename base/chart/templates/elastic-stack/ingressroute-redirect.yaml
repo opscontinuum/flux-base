@@ -1,0 +1,26 @@
+{{- if and .Values.elasticStack.enabled .Values.elasticStack.kibana.ingress.enabled (default true .Values.httpsRedirect) }}
+{{- $domainName := default .Values.domain .Values.hostname }}
+{{- $kibanaHost := .Values.elasticStack.kibana.ingress.host | default (printf "kibana.%s" $domainName) }}
+{{- $namespace := .Values.elasticStack.namespace | default "elastic-stack" }}
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kibana-http-redirect
+  namespace: {{ $namespace }}
+  labels:
+    app.kubernetes.io/name: kibana
+    app.kubernetes.io/component: "logging"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`{{ $kibanaHost }}`)
+      kind: Rule
+      middlewares:
+        - name: redirect-to-https
+          namespace: {{ $namespace }}
+      services:
+        - name: {{ .Values.elasticStack.kibana.name | default "kibana" }}-kb-http
+          port: 5601
+{{- end }}

@@ -1,0 +1,226 @@
+{{- if .Values.certManager.enabled }}
+{{/*
+ClusterIssuers are created after cert-manager is installed.
+These are deployed directly (not via Flux HelmRelease) since they're cluster-scoped
+and depend on cert-manager CRDs being available.
+*/}}
+
+{{/* Self-Signed Issuer - for bootstrapping and development */}}
+{{- if .Values.certManager.clusterIssuers.selfSigned.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.certManager.clusterIssuers.selfSigned.name }}
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: "cluster-issuer"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    # Ensure this is created after cert-manager HelmRelease
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+spec:
+  selfSigned: {}
+{{- end }}
+
+{{/* Self-Signed CA Issuer - creates a local CA for signing certificates */}}
+{{- if .Values.certManager.clusterIssuers.selfSignedCA.enabled }}
+---
+# First, create a self-signed issuer for the CA certificate
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.certManager.clusterIssuers.selfSignedCA.name }}-bootstrap
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: "cluster-issuer"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+spec:
+  selfSigned: {}
+---
+# CA Certificate - signed by the bootstrap issuer
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.certManager.clusterIssuers.selfSignedCA.name }}-ca
+  namespace: cert-manager
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: "cluster-issuer"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "2"
+spec:
+  isCA: true
+  commonName: {{ .Values.certManager.clusterIssuers.selfSignedCA.commonName | quote }}
+  secretName: {{ .Values.certManager.clusterIssuers.selfSignedCA.name }}-ca-secret
+  duration: {{ .Values.certManager.clusterIssuers.selfSignedCA.duration }}
+  renewBefore: {{ .Values.certManager.clusterIssuers.selfSignedCA.renewBefore }}
+  subject:
+    organizations:
+      - OpsContinuum
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.certManager.clusterIssuers.selfSignedCA.name }}-bootstrap
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# CA Issuer - uses the CA certificate to sign other certificates
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.certManager.clusterIssuers.selfSignedCA.name }}
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: "cluster-issuer"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "3"
+spec:
+  ca:
+    secretName: {{ .Values.certManager.clusterIssuers.selfSignedCA.name }}-ca-secret
+{{- end }}
+
+{{/* Let's Encrypt Staging Issuer */}}
+{{- if .Values.certManager.clusterIssuers.letsencryptStaging.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.certManager.clusterIssuers.letsencryptStaging.name }}
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: "cluster-issuer"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+spec:
+  acme:
+    # Let's Encrypt Staging server
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: {{ required "certManager.acmeEmail is required - set your own contact email before deploying (see README)" .Values.certManager.acmeEmail }}
+    # Secret to store the ACME account private key
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+    {{- if eq .Values.certManager.clusterIssuers.letsencryptStaging.solver.type "dns01" }}
+    # DNS-01 challenge - required for internal/local use without external IPs
+    - dns01:
+        {{- $provider := .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.provider }}
+        {{- if eq $provider "cloudflare" }}
+        cloudflare:
+          email: {{ required "certManager.acmeEmail is required - set your own contact email before deploying (see README)" .Values.certManager.acmeEmail }}
+          apiTokenSecretRef:
+            name: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.cloudflare.apiTokenSecretRef.name }}
+            key: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.cloudflare.apiTokenSecretRef.key }}
+        {{- else if eq $provider "route53" }}
+        route53:
+          region: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.route53.region }}
+          accessKeyIDSecretRef:
+            name: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.route53.accessKeyIDSecretRef.name }}
+            key: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.route53.accessKeyIDSecretRef.key }}
+          secretAccessKeySecretRef:
+            name: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.route53.secretAccessKeySecretRef.name }}
+            key: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.route53.secretAccessKeySecretRef.key }}
+        {{- else if eq $provider "digitalocean" }}
+        digitalocean:
+          tokenSecretRef:
+            name: digitalocean-dns-token
+            key: access-token
+        {{- else if eq $provider "azuredns" }}
+        azureDNS:
+          subscriptionID: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.azuredns.subscriptionID }}
+          resourceGroupName: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.azuredns.resourceGroupName }}
+          hostedZoneName: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.azuredns.hostedZoneName }}
+          environment: AzurePublicCloud
+          managedIdentity:
+            clientID: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.dns01.azuredns.managedIdentityClientID }}
+        {{- else }}
+        # Provider not configured - update values to specify a DNS provider
+        {{- fail "certManager.clusterIssuers.letsencryptStaging.solver.dns01.provider must be set (cloudflare, route53, digitalocean, azuredns)" }}
+        {{- end }}
+    {{- else }}
+    # HTTP-01 challenge - requires external IP/ingress
+    - http01:
+        ingress:
+          class: {{ .Values.certManager.clusterIssuers.letsencryptStaging.solver.http01.ingressClass | default "" }}
+    {{- end }}
+{{- end }}
+
+{{/* Let's Encrypt Production Issuer */}}
+{{- if .Values.certManager.clusterIssuers.letsencrypt.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.certManager.clusterIssuers.letsencrypt.name }}
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: "cluster-issuer"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+spec:
+  acme:
+    # Let's Encrypt Production server
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: {{ required "certManager.acmeEmail is required - set your own contact email before deploying (see README)" .Values.certManager.acmeEmail }}
+    # Secret to store the ACME account private key
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    {{- if eq .Values.certManager.clusterIssuers.letsencrypt.solver.type "dns01" }}
+    # DNS-01 challenge - required for internal/local use without external IPs
+    - dns01:
+        {{- $provider := .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.provider }}
+        {{- if eq $provider "cloudflare" }}
+        cloudflare:
+          email: {{ required "certManager.acmeEmail is required - set your own contact email before deploying (see README)" .Values.certManager.acmeEmail }}
+          apiTokenSecretRef:
+            name: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.cloudflare.apiTokenSecretRef.name }}
+            key: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.cloudflare.apiTokenSecretRef.key }}
+        {{- else if eq $provider "route53" }}
+        route53:
+          region: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.route53.region }}
+          accessKeyIDSecretRef:
+            name: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.route53.accessKeyIDSecretRef.name }}
+            key: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.route53.accessKeyIDSecretRef.key }}
+          secretAccessKeySecretRef:
+            name: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.route53.secretAccessKeySecretRef.name }}
+            key: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.route53.secretAccessKeySecretRef.key }}
+        {{- else if eq $provider "digitalocean" }}
+        digitalocean:
+          tokenSecretRef:
+            name: digitalocean-dns-token
+            key: access-token
+        {{- else if eq $provider "azuredns" }}
+        azureDNS:
+          subscriptionID: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.azuredns.subscriptionID }}
+          resourceGroupName: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.azuredns.resourceGroupName }}
+          hostedZoneName: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.azuredns.hostedZoneName }}
+          environment: AzurePublicCloud
+          managedIdentity:
+            clientID: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.dns01.azuredns.managedIdentityClientID }}
+        {{- else }}
+        # Provider not configured - update values to specify a DNS provider
+        {{- fail "certManager.clusterIssuers.letsencrypt.solver.dns01.provider must be set (cloudflare, route53, digitalocean, azuredns)" }}
+        {{- end }}
+    {{- else }}
+    # HTTP-01 challenge - requires external IP/ingress
+    - http01:
+        ingress:
+          class: {{ .Values.certManager.clusterIssuers.letsencrypt.solver.http01.ingressClass | default "" }}
+    {{- end }}
+{{- end }}
+
+{{- end }}

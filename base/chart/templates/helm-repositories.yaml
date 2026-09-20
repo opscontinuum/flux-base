@@ -1,0 +1,16 @@
+{{- range .Values.helmRepositories }}
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "commonLabels" $ | nindent 4 }}
+spec:
+  interval: 10m
+  url: {{ .repository }}
+  {{- if eq .type "oci" }}
+  type: oci
+  {{- end }}
+{{- end }}

@@ -1,0 +1,43 @@
+{{- if and .Values.elasticStack.enabled (default false .Values.elasticStack.apmServer.enabled) }}
+---
+apiVersion: apm.k8s.elastic.co/v1
+kind: ApmServer
+metadata:
+  name: apm-server
+  namespace: {{ .Values.elasticStack.namespace }}
+  labels:
+    app.kubernetes.io/name: apm-server
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  version: {{ .Values.elasticStack.version }}
+  count: {{ .Values.elasticStack.apmServer.replicas | default 1 }}
+  elasticsearchRef:
+    name: {{ .Values.elasticStack.elasticsearch.name }}
+  kibanaRef:
+    name: {{ .Values.elasticStack.kibana.name }}
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: {{ .Values.elasticStack.apmServer.disableTls | default true }}
+  config:
+    # Enable RUM (Real User Monitoring)
+    apm-server.rum.enabled: true
+    # Enable OpenTelemetry support
+    apm-server.kibana.enabled: true
+    # Allow anonymous access for OpenTelemetry agents
+    apm-server.auth.anonymous.enabled: true
+    apm-server.auth.anonymous.allow_agent:
+      - opentelemetry/python
+      - opentelemetry/nodejs
+      - opentelemetry/java
+      - opentelemetry/java/elastic
+      - opentelemetry/dotnet
+      - opentelemetry/go
+  podTemplate:
+    spec:
+      containers:
+        - name: apm-server
+          resources:
+            {{- toYaml (.Values.elasticStack.apmServer.resources | default (dict "limits" (dict "memory" "512Mi" "cpu" "500m") "requests" (dict "memory" "256Mi" "cpu" "100m"))) | nindent 12 }}
+{{- end }}

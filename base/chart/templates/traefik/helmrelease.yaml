@@ -1,0 +1,80 @@
+{{- $fluxSettings := merge .Values.traefik.flux .Values.flux -}}
+{{- if .Values.traefik.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/traefik/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: traefik
+  chart:
+    spec:
+      {{- if eq .Values.traefik.sourceType "git" }}
+      chart: {{ .Values.traefik.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: traefik
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.traefik.helmRepo.chartName }}
+      version: {{ .Values.traefik.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.traefik.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.traefik.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.traefik.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.traefik.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  install:
+    crds: CreateReplace
+    {{- if $fluxSettings.install }}
+    {{- toYaml $fluxSettings.install | nindent 4 }}
+    {{- end }}
+
+  upgrade:
+    crds: CreateReplace
+    {{- if $fluxSettings.upgrade }}
+    {{- toYaml $fluxSettings.upgrade | nindent 4 }}
+    {{- end }}
+
+  {{- if $fluxSettings.interval }}
+  interval: {{ $fluxSettings.interval }}
+  {{- end }}
+  {{- if $fluxSettings.test }}
+  test:
+    {{- toYaml $fluxSettings.test | nindent 4 }}
+  {{- end }}
+  {{- if $fluxSettings.rollback }}
+  rollback:
+    {{- toYaml $fluxSettings.rollback | nindent 4 }}
+  {{- end }}
+
+  {{- if .Values.traefik.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.traefik.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-traefik-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-traefik-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-traefik-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}

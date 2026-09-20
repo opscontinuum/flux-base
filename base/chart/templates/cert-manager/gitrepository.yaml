@@ -1,0 +1,24 @@
+{{- if and (eq .Values.certManager.sourceType "git") .Values.certManager.enabled }}
+{{- $gitCredsDict := dict
+  "name" "cert-manager"
+  "packageGitScope" .Values.certManager.git
+  "rootScope" .
+  "releaseName" .Release.Name
+}}
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: cert-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  interval: {{ .Values.flux.interval }}
+  url: {{ .Values.certManager.git.repo }}
+  ref:
+    {{- include "validRef" .Values.certManager.git | nindent 4 }}
+  {{ include "gitIgnore" . }}
+  {{- include "gitCredsExtended" $gitCredsDict | nindent 2 }}
+{{- end }}

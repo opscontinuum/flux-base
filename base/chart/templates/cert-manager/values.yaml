@@ -1,0 +1,92 @@
+{{- if .Values.certManager.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.certManager "name" "cert-manager" "defaults" (include "opsc.defaults.cert-manager" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.cert-manager" -}}
+# Cert-Manager default values
+
+# Install CRDs with Helm
+crds:
+  enabled: true
+  keep: true
+
+# Global settings
+global:
+  leaderElection:
+    namespace: cert-manager
+
+# Image configuration
+image:
+  repository: quay.io/jetstack/cert-manager-controller
+  pullPolicy: {{ .Values.imagePullPolicy }}
+
+{{- if (include "imagePullSecret" .) }}
+imagePullSecrets:
+  - name: private-registry
+{{- end }}
+
+# Replicas
+replicaCount: 1
+
+# Use recursive nameservers for DNS01 challenge verification
+# This is needed when cluster DNS can't resolve external SOA records
+extraArgs:
+  - --dns01-recursive-nameservers-only
+  - --dns01-recursive-nameservers=1.1.1.1:53,8.8.8.8:53
+
+# Resources
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Webhook
+webhook:
+  replicaCount: 1
+  image:
+    repository: quay.io/jetstack/cert-manager-webhook
+    pullPolicy: {{ .Values.imagePullPolicy }}
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 20m
+      memory: 32Mi
+
+# CA Injector
+cainjector:
+  replicaCount: 1
+  image:
+    repository: quay.io/jetstack/cert-manager-cainjector
+    pullPolicy: {{ .Values.imagePullPolicy }}
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 20m
+      memory: 64Mi
+
+# Startup API check
+startupapicheck:
+  image:
+    repository: quay.io/jetstack/cert-manager-startupapicheck
+    pullPolicy: {{ .Values.imagePullPolicy }}
+
+# Security context
+securityContext:
+  runAsNonRoot: true
+
+# Pod security context
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+{{- end -}}

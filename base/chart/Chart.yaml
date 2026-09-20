@@ -1,0 +1,16 @@
+apiVersion: v2
+name: opsc
+description: A Helm chart for deploying a curated set of Kubernetes platform components using GitOps (FluxCD)
+type: application
+version: 0.2.11
+appVersion: "0.2.11"
+kubeVersion: ">=1.28.0-0"
+keywords:
+  - platform
+  - gitops
+  - flux
+  - logging
+  - cicd
+maintainers:
+  - name: OpsContinuum
+dependencies: []

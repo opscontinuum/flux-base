@@ -1,0 +1,91 @@
+{{- if .Values.elasticStack.enabled }}
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: {{ .Values.elasticStack.kibana.name | default "kibana" }}
+  namespace: {{ .Values.elasticStack.namespace | default "elastic-stack" }}
+  labels:
+    app.kubernetes.io/name: kibana
+    app.kubernetes.io/component: "logging"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  version: {{ .Values.elasticStack.version | default "8.15.0" }}
+  {{- if .Values.elasticStack.kibana.image }}
+  image: {{ .Values.elasticStack.kibana.image }}
+  {{- end }}
+  count: {{ .Values.elasticStack.kibana.replicas | default 1 }}
+  elasticsearchRef:
+    name: {{ .Values.elasticStack.elasticsearch.name | default "elasticsearch" }}
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: {{ .Values.elasticStack.kibana.disableTls | default false }}
+  config:
+    # Enable Fleet
+    xpack.fleet.agents.elasticsearch.hosts:
+      - "https://{{ .Values.elasticStack.elasticsearch.name | default "elasticsearch" }}-es-http.{{ .Values.elasticStack.namespace | default "elastic-stack" }}.svc:9200"
+    xpack.fleet.agents.fleet_server.hosts:
+      - "https://fleet-server-agent-http.{{ .Values.elasticStack.namespace | default "elastic-stack" }}.svc:8220"
+    xpack.fleet.packages:
+      - name: system
+        version: latest
+      - name: elastic_agent
+        version: latest
+      - name: fleet_server
+        version: latest
+      - name: kubernetes
+        version: latest
+    xpack.fleet.agentPolicies:
+      - name: Fleet Server Policy
+        id: fleet-server-policy
+        namespace: default
+        monitoring_enabled:
+          - logs
+          - metrics
+        package_policies:
+          - name: fleet_server-1
+            id: fleet_server-1
+            package:
+              name: fleet_server
+      - name: Kubernetes Policy
+        id: kubernetes-policy
+        namespace: default
+        monitoring_enabled:
+          - logs
+          - metrics
+        package_policies:
+          - name: system-1
+            id: system-1
+            package:
+              name: system
+          - name: kubernetes-1
+            id: kubernetes-1
+            package:
+              name: kubernetes
+    {{- if .Values.elasticStack.kibana.config }}
+    {{- toYaml .Values.elasticStack.kibana.config | nindent 4 }}
+    {{- end }}
+  podTemplate:
+    spec:
+      containers:
+        - name: kibana
+          resources:
+            {{- if .Values.elasticStack.kibana.resources }}
+            {{- toYaml .Values.elasticStack.kibana.resources | nindent 12 }}
+            {{- else }}
+            limits:
+              memory: 1Gi
+              cpu: 1000m
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            {{- end }}
+      {{- if .Values.elasticStack.kibana.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.elasticStack.kibana.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.elasticStack.kibana.tolerations }}
+      tolerations:
+        {{- toYaml .Values.elasticStack.kibana.tolerations | nindent 8 }}
+      {{- end }}
+{{- end }}

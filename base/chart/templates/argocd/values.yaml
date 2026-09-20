@@ -1,0 +1,150 @@
+{{- if .Values.argocd.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.argocd "name" "argocd" "defaults" (include "opsc.defaults.argocd" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.argocd" -}}
+# ArgoCD default values
+{{- $domainName := default .Values.domain .Values.hostname }}
+hostname: {{ $domainName }}
+domain: {{ $domainName }}
+
+# Create namespace (handled by opsc chart)
+createNamespace: false
+
+global:
+  domain: argocd.{{ $domainName }}
+  image:
+    repository: quay.io/argoproj/argocd
+    tag: v2.13.0
+    imagePullPolicy: {{ .Values.imagePullPolicy }}
+  {{- if (include "imagePullSecret" .) }}
+  imagePullSecrets:
+    - name: private-registry
+  {{- end }}
+
+# Server
+server:
+  replicas: 1
+
+  autoscaling:
+    enabled: false
+
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+      traefik.ingress.kubernetes.io/router.tls: "true"
+    hosts:
+      - argocd.{{ $domainName }}
+    tls:
+      - secretName: argocd-server-tls
+        hosts:
+          - argocd.{{ $domainName }}
+
+  # Disable built-in TLS as ingress handles it
+  extraArgs:
+    - --insecure
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Controller
+controller:
+  replicas: 1
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+# Repo Server
+repoServer:
+  replicas: 1
+
+  autoscaling:
+    enabled: false
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+# ApplicationSet Controller
+applicationSet:
+  enabled: true
+  replicas: 1
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Notifications Controller
+notifications:
+  enabled: false
+
+# Redis (bundled)
+redis:
+  enabled: true
+
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Dex (SSO) - disabled by default
+dex:
+  enabled: false
+
+# Configs
+configs:
+  # Repository credentials
+  credentialTemplates: {}
+
+  # Repositories
+  repositories: {}
+
+  # CM - ConfigMap settings
+  cm:
+    # Enable exec for terminal access
+    exec.enabled: "false"
+
+    # Kustomize build options
+    kustomize.buildOptions: "--enable-alpha-plugins"
+
+    # Resource health customizations
+    resource.customizations: ""
+
+  # RBAC
+  rbac:
+    policy.default: role:readonly
+    policy.csv: |
+      p, role:admin, applications, *, */*, allow
+      p, role:admin, clusters, *, *, allow
+      p, role:admin, repositories, *, *, allow
+      p, role:admin, projects, *, *, allow
+      g, admin, role:admin
+
+  # Params
+  params:
+    server.insecure: true
+
+{{- end -}}

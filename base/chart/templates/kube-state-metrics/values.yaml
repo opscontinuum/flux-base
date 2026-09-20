@@ -1,0 +1,43 @@
+{{- if .Values.kubeStateMetrics.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.kubeStateMetrics "name" "kube-state-metrics" "defaults" (include "opsc.defaults.kube-state-metrics" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.kube-state-metrics" -}}
+# kube-state-metrics default values
+
+# Image configuration
+image:
+  pullPolicy: {{ .Values.imagePullPolicy }}
+
+{{- if (include "imagePullSecret" .) }}
+imagePullSecrets:
+  - name: private-registry
+{{- end }}
+
+# Resources
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 32Mi
+
+# Prometheus scraping - disabled by default since we use Elastic
+prometheus:
+  monitor:
+    enabled: false
+
+# Self-monitor metrics
+selfMonitor:
+  enabled: false
+
+# RBAC
+rbac:
+  create: true
+
+# Service account
+serviceAccount:
+  create: true
+
+{{- end -}}

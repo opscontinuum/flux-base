@@ -1,0 +1,58 @@
+{{- $fluxSettings := merge .Values.metallb.flux .Values.flux -}}
+{{- if .Values.metallb.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: metallb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: metallb
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/metallb/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: metallb-system
+  chart:
+    spec:
+      {{- if eq .Values.metallb.sourceType "git" }}
+      chart: {{ .Values.metallb.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: metallb
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.metallb.helmRepo.chartName }}
+      version: {{ .Values.metallb.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.metallb.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.metallb.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.metallb.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.metallb.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.metallb.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.metallb.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-metallb-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-metallb-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-metallb-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}

@@ -1,0 +1,28 @@
+{{- if .Values.metallb.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.metallb "name" "metallb" "defaults" (include "opsc.defaults.metallb" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.metallb" -}}
+# MetalLB default values
+
+# Controller configuration
+controller:
+  image:
+    repository: quay.io/metallb/controller
+    pullPolicy: {{ .Values.imagePullPolicy }}
+
+# Speaker configuration
+speaker:
+  image:
+    repository: quay.io/metallb/speaker
+    pullPolicy: {{ .Values.imagePullPolicy }}
+  # Run on all nodes
+  tolerations:
+    - operator: Exists
+
+{{- if (include "imagePullSecret" .) }}
+imagePullSecrets:
+  - name: private-registry
+{{- end }}
+
+{{- end -}}

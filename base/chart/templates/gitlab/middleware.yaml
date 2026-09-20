@@ -1,0 +1,14 @@
+{{- if and .Values.gitlab.enabled (default true .Values.httpsRedirect) }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-to-https
+  namespace: gitlab
+  labels:
+    app.kubernetes.io/name: gitlab
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+{{- end }}

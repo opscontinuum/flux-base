@@ -1,0 +1,10 @@
+{{- if .Values.opentelemetryOperator.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opentelemetry-operator-system
+  labels:
+    app.kubernetes.io/name: opentelemetry-operator
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+{{- end }}

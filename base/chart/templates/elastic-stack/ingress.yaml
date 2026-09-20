@@ -1,0 +1,28 @@
+{{- if and .Values.elasticStack.enabled .Values.elasticStack.kibana.ingress.enabled }}
+{{- $domainName := default .Values.domain .Values.hostname }}
+{{- $kibanaHost := .Values.elasticStack.kibana.ingress.host | default (printf "kibana.%s" $domainName) }}
+{{- $namespace := .Values.elasticStack.namespace | default "elastic-stack" }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kibana
+  namespace: {{ $namespace }}
+  labels:
+    app.kubernetes.io/name: kibana
+    app.kubernetes.io/component: "logging"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`{{ $kibanaHost }}`)
+      kind: Rule
+      services:
+        - name: {{ .Values.elasticStack.kibana.name | default "kibana" }}-kb-http
+          port: 5601
+          scheme: https
+          serversTransport: kibana-transport
+  tls:
+    secretName: {{ .Values.elasticStack.kibana.ingress.tlsSecretName | default "kibana-tls" }}
+{{- end }}

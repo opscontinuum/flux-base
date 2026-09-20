@@ -1,0 +1,1040 @@
+# =============================================================================
+# OPSC CHART - DEFAULT VALUES
+# =============================================================================
+# A curated set of Kubernetes platform components for local/disconnected use
+# Packages: Traefik, MetalLB, Cert-Manager, ECK-Operator, Elastic Stack, GitLab, GitLab Runner, ArgoCD, n8n
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Global Configuration
+# -----------------------------------------------------------------------------
+
+# Domain for ingress/services
+domain: example.test
+
+# ClusterIssuer to use for certificates (e.g., "self-signed", "letsencrypt-staging", "letsencrypt-prod")
+clusterIssuer: letsencrypt-prod
+
+# Automatically redirect HTTP to HTTPS for all services
+httpsRedirect: true
+
+# Image pull policy for all packages
+imagePullPolicy: IfNotPresent
+
+# OpenShift compatibility mode
+openshift: false
+
+# -----------------------------------------------------------------------------
+# Registry Credentials
+# -----------------------------------------------------------------------------
+# For private registries. Leave empty for public images.
+# Can be a single credential or a list of credentials.
+registryCredentials:
+  registry: ""
+  username: ""
+  password: ""
+  email: ""
+
+# -----------------------------------------------------------------------------
+# Flux Configuration
+# -----------------------------------------------------------------------------
+# Global Flux settings applied to all HelmReleases
+flux:
+  interval: 10m
+  test:
+    enable: false
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: 5
+      remediateLastFailure: true
+    cleanupOnFail: true
+  rollback:
+    timeout: 10m
+    cleanupOnFail: false
+
+# -----------------------------------------------------------------------------
+# Git Credentials (Global)
+# -----------------------------------------------------------------------------
+# Used when packages source from Git repositories
+git:
+  existingSecret: ""
+  credentials:
+    username: ""
+    password: ""
+    caFile: ""
+    privateKey: ""
+    publicKey: ""
+    knownHosts: ""
+
+# -----------------------------------------------------------------------------
+# Helm Repositories
+# -----------------------------------------------------------------------------
+# Define Helm repositories for packages using helmRepo sourceType
+helmRepositories:
+  - name: jetstack
+    repository: https://charts.jetstack.io
+    type: default
+  - name: elastic
+    repository: https://helm.elastic.co
+    type: default
+  - name: gitlab
+    repository: https://charts.gitlab.io
+    type: default
+  - name: argo
+    repository: https://argoproj.github.io/argo-helm
+    type: default
+  - name: community-charts
+    repository: https://community-charts.github.io/helm-charts
+    type: default
+  - name: open-telemetry
+    repository: https://open-telemetry.github.io/opentelemetry-helm-charts
+    type: default
+  - name: traefik
+    repository: https://traefik.github.io/charts
+    type: default
+  - name: metallb
+    repository: https://metallb.github.io/metallb
+    type: default
+  - name: grafana
+    repository: https://grafana.github.io/helm-charts
+    type: default
+  - name: grafana-oci
+    repository: oci://ghcr.io/grafana/helm-charts
+    type: oci
+  - name: prometheus-community
+    repository: https://prometheus-community.github.io/helm-charts
+    type: default
+
+# -----------------------------------------------------------------------------
+# Network Policies
+# -----------------------------------------------------------------------------
+networkPolicies:
+  enabled: true
+  controlPlaneCidr: 0.0.0.0/0
+  nodeCidr: ""
+  vpcCidr: 0.0.0.0/0
+
+# =============================================================================
+# PACKAGES
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Traefik (Ingress Controller)
+# -----------------------------------------------------------------------------
+# Traefik provides IngressRoute CRDs used by other packages in this chart.
+# If your cluster already has Traefik installed, you can leave this disabled.
+#
+# Network Mode Options:
+# ---------------------
+# Option 1: hostNetwork (default, recommended for single-node/bare-metal)
+#   - Traefik binds directly to node ports 80/443
+#   - No LoadBalancer or NodePort required
+#   - Access services at: https://<node-ip>/
+#   - Set: hostNetwork.enabled=true, service.enabled=false
+#
+# Option 2: LoadBalancer (requires MetalLB or cloud provider)
+#   - External IP assigned to Traefik service
+#   - Access services at: https://<external-ip>/
+#   - Set: hostNetwork.enabled=false, service.enabled=true, service.type=LoadBalancer
+#
+# Option 3: NodePort (works anywhere, non-standard ports)
+#   - Access via high ports (e.g., 31080, 31443)
+#   - Access services at: https://<node-ip>:<nodeport>/
+#   - Set: hostNetwork.enabled=false, service.enabled=true, service.type=NodePort
+#
+traefik:
+  enabled: true
+
+  sourceType: "helmRepo"
+
+  git:
+    repo: ""
+    path: chart
+    tag: ""
+    branch: main
+    existingSecret: ""
+    credentials:
+      username: ""
+      password: ""
+      caFile: ""
+      privateKey: ""
+      publicKey: ""
+      knownHosts: ""
+
+  helmRepo:
+    repoName: traefik
+    chartName: traefik
+    tag: "34.0.0"
+    cosignVerify: false
+
+  flux: {}
+  postRenderers: []
+
+  # HostNetwork mode (Option 1)
+  # Binds Traefik directly to node ports 80/443
+  # WARNING: Conflicts with Harvester's nginx ingress on ports 80/443
+  hostNetwork:
+    enabled: false
+
+  # Service configuration (Option 2 - default for Harvester)
+  # Uses MetalLB to assign a dedicated IP to Traefik
+  service:
+    enabled: true
+    type: LoadBalancer
+    loadBalancerIP: ""  # Leave empty to auto-assign from MetalLB pool
+
+  # Dashboard configuration
+  dashboard:
+    enabled: false
+
+  # Logging
+  logLevel: INFO
+  accessLogs:
+    enabled: false
+
+  # Replicas (ignored when using DaemonSet with hostNetwork)
+  replicas: 1
+
+  # Package-specific values passed to the upstream chart
+  values:
+    # Install CRDs
+    crds:
+      enabled: true
+
+    # Resources
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+# -----------------------------------------------------------------------------
+# MetalLB (Bare-metal Load Balancer)
+# -----------------------------------------------------------------------------
+# MetalLB provides LoadBalancer service support for bare-metal clusters.
+# Required when using Traefik with service.type=LoadBalancer on bare-metal.
+# Not needed when using hostNetwork mode (default).
+metallb:
+  enabled: true
+
+  sourceType: "helmRepo"
+
+  git:
+    repo: ""
+    path: chart
+    tag: ""
+    branch: main
+    existingSecret: ""
+    credentials:
+      username: ""
+      password: ""
+      caFile: ""
+      privateKey: ""
+      publicKey: ""
+      knownHosts: ""
+
+  helmRepo:
+    repoName: metallb
+    chartName: metallb
+    tag: "0.14.9"
+    cosignVerify: false
+
+  flux: {}
+  postRenderers: []
+
+  # IP Address Pool configuration
+  # Define the range of IPs MetalLB can assign to LoadBalancer services
+  addressPool:
+    name: default-pool
+    # Illustrative range only - replace with your own network's available IPs.
+    # Example: addresses: ["10.0.0.100/32", "10.0.0.101/32"]
+    addresses: ["192.168.1.240-192.168.1.250"]
+
+  # Package-specific values passed to the upstream chart
+  values: {}
+
+# -----------------------------------------------------------------------------
+# Cert-Manager (TLS Certificate Management)
+# -----------------------------------------------------------------------------
+certManager:
+  enabled: true
+
+  # -----------------------------------------------------------------------------
+  # REQUIRED: contact email for ACME (Let's Encrypt) account registration and
+  # for the Cloudflare DNS-01 solver. No default is provided on purpose: the
+  # chart fails to render until you set this, rather than silently issuing
+  # certificates against someone else's address. Set it first, before
+  # anything else. See README.md, "Before you deploy".
+  # -----------------------------------------------------------------------------
+  acmeEmail: ""
+
+  sourceType: "helmRepo"
+
+  git:
+    repo: ""
+    path: chart
+    tag: ""
+    branch: main
+    existingSecret: ""
+    credentials:
+      username: ""
+      password: ""
+      caFile: ""
+      privateKey: ""
+      publicKey: ""
+      knownHosts: ""
+
+  helmRepo:
+    repoName: jetstack
+    chartName: cert-manager
+    tag: "v1.16.2"
+    cosignVerify: false
+
+  flux: {}
+  postRenderers: []
+
+  # ClusterIssuer configuration
+  # For local/internal use without external IPs, we support:
+  # - selfSigned: Creates a self-signed CA (good for development)
+  # - letsencryptStaging: Let's Encrypt staging (for testing ACME)
+  # - letsencrypt: Let's Encrypt production
+  # Note: Let's Encrypt requires DNS-01 challenge for internal use
+  clusterIssuers:
+    # Self-signed issuer (always created, good for local dev)
+    selfSigned:
+      enabled: true
+      name: selfsigned-issuer
+
+    # Self-signed CA issuer (creates a CA that can sign other certs)
+    selfSignedCA:
+      enabled: true
+      name: self-signed
+      # Common name for the CA certificate
+      commonName: "OpsContinuum Root CA"
+      # Duration of the CA certificate
+      duration: 87600h  # 10 years
+      # Renew before expiry
+      renewBefore: 720h  # 30 days
+
+    # Let's Encrypt Staging (for testing, has higher rate limits)
+    letsencryptStaging:
+      enabled: true
+      name: letsencrypt-staging
+      # Contact email comes from certManager.acmeEmail above (required, no default).
+      # For internal use, DNS-01 challenge is required
+      # Configure your DNS provider below
+      solver:
+        type: dns01  # dns01 or http01
+        # DNS-01 solver configuration (required for internal/no external IP)
+        dns01:
+          # Supported providers: cloudflare, route53, cloudDNS, azureDNS, digitalocean, etc.
+          provider: "cloudflare"
+          # Provider-specific configuration
+          cloudflare:
+            # Contact email comes from certManager.acmeEmail above (required, no default).
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+          route53:
+            region: us-east-1
+            accessKeyIDSecretRef:
+              name: route53-credentials
+              key: access-key-id
+            secretAccessKeySecretRef:
+              name: route53-credentials
+              key: secret-access-key
+          # Add more providers as needed
+
+    # Let's Encrypt Production
+    letsencrypt:
+      enabled: true
+      name: letsencrypt-prod
+      # Contact email comes from certManager.acmeEmail above (required, no default).
+      solver:
+        type: dns01
+        dns01:
+          provider: "cloudflare"
+          cloudflare:
+            # Contact email comes from certManager.acmeEmail above (required, no default).
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token
+          route53:
+            region: us-east-1
+            accessKeyIDSecretRef:
+              name: route53-credentials
+              key: access-key-id
+            secretAccessKeySecretRef:
+              name: route53-credentials
+              key: secret-access-key
+
+  values:
+    # Install CRDs
+    crds:
+      enabled: true
+      keep: true
+
+    # Image configuration
+    image:
+      repository: quay.io/jetstack/cert-manager-controller
+      tag: v1.16.2
+      pullPolicy: IfNotPresent
+
+    # Webhook
+    webhook:
+      image:
+        repository: quay.io/jetstack/cert-manager-webhook
+        tag: v1.16.2
+
+    # CA Injector
+    cainjector:
+      image:
+        repository: quay.io/jetstack/cert-manager-cainjector
+        tag: v1.16.2
+
+    # Startup API check
+    startupapicheck:
+      image:
+        repository: quay.io/jetstack/cert-manager-startupapicheck
+        tag: v1.16.2
+
+    # Resources
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+    webhook:
+      resources:
+        limits:
+          cpu: 200m
+          memory: 128Mi
+        requests:
+          cpu: 20m
+          memory: 32Mi
+
+    cainjector:
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 20m
+          memory: 64Mi
+
+    # Prometheus monitoring
+    prometheus:
+      enabled: false
+      servicemonitor:
+        enabled: false
+
+# -----------------------------------------------------------------------------
+# ECK Operator (Elastic Cloud on Kubernetes)
+# -----------------------------------------------------------------------------
+eckOperator:
+  enabled: true
+
+  # Source type: "git" or "helmRepo"
+  sourceType: "helmRepo"
+
+  # Git source configuration
+  git:
+    repo: ""
+    path: chart
+    tag: ""
+    branch: main
+    existingSecret: ""
+    credentials:
+      username: ""
+      password: ""
+      caFile: ""
+      privateKey: ""
+      publicKey: ""
+      knownHosts: ""
+
+  # Helm repository source configuration
+  helmRepo:
+    repoName: elastic
+    chartName: eck-operator
+    tag: "3.2.0"
+    cosignVerify: false
+
+  # Flux settings override for this package
+  flux: {}
+
+  # Post-renderers for Kustomize patches
+  postRenderers: []
+
+  # Package-specific values passed to the upstream chart
+  values:
+    # Image configuration
+    image:
+      repository: docker.elastic.co/eck/eck-operator
+      tag: "3.2.0"
+      pullPolicy: IfNotPresent
+
+    # Resources
+    resources:
+      limits:
+        cpu: 1
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 150Mi
+
+    # Webhook configuration
+    webhook:
+      enabled: true
+
+# -----------------------------------------------------------------------------
+# GitLab (DevOps Platform)
+# -----------------------------------------------------------------------------
+gitlab:
+  enabled: true
+
+  # -----------------------------------------------------------------------------
+  # REQUIRED: credentials for the bundled PostgreSQL and Redis StatefulSets
+  # (templates/gitlab/postgresql.yaml and templates/gitlab/redis.yaml). No
+  # defaults are provided on purpose: a public chart that ships a working
+  # default password is a chart anyone can log into unchanged. The chart
+  # fails to render until these are set. Generate strong values with, e.g.:
+  #   openssl rand -base64 24
+  # See README.md, "Before you deploy".
+  # -----------------------------------------------------------------------------
+  postgresqlPassword: ""
+  postgresqlPostgresPassword: ""
+  redisPassword: ""
+
+  sourceType: "helmRepo"
+
+  git:
+    repo: ""
+    path: chart
+    tag: ""
+    branch: main
+    existingSecret: ""
+    credentials:
+      username: ""
+      password: ""
+      caFile: ""
+      privateKey: ""
+      publicKey: ""
+      knownHosts: ""
+
+  helmRepo:
+    repoName: gitlab
+    chartName: gitlab
+    tag: "8.6.0"
+    cosignVerify: false
+
+  ingress:
+    gateway: ""
+
+  flux: {}
+  postRenderers: []
+
+  # SSO configuration
+  sso:
+    enabled: false
+    client_id: ""
+    client_secret: ""
+
+  # Redis configuration (external or bundled)
+  redis:
+    host: ""
+    port: ""
+    password: ""
+
+  # Object storage configuration
+  objectStorage:
+    type: ""
+    endpoint: ""
+    region: ""
+    accessKey: ""
+    accessSecret: ""
+    bucketPrefix: gitlab
+
+  values:
+    global:
+      edition: ce
+      hosts:
+        domain: example.test
+        https: true
+
+      ingress:
+        configureCertmanager: false
+        enabled: true
+        tls:
+          enabled: true
+
+      # Use bundled components for local deployment
+      minio:
+        enabled: true
+
+      # Disable components not needed for local dev
+      grafana:
+        enabled: false
+
+      # Registry
+      registry:
+        enabled: true
+
+    # Disable certmanager (use your own certs)
+    certmanager:
+      install: false
+
+    # Disable nginx-ingress (use existing ingress)
+    nginx-ingress:
+      enabled: false
+
+    # Disable Prometheus (use external monitoring)
+    prometheus:
+      install: false
+
+    # GitLab Runner installed separately
+    gitlab-runner:
+      install: false
+
+# -----------------------------------------------------------------------------
+# GitLab Runner
+# -----------------------------------------------------------------------------
+gitlabRunner:
+  enabled: true
+
+  sourceType: "helmRepo"
+
+  git:
+    repo: ""
+    path: chart
+    tag: ""
+    branch: main
+    existingSecret: ""
+    credentials:
+      username: ""
+      password: ""
+      caFile: ""
+      privateKey: ""
+      publicKey: ""
+      knownHosts: ""
+
+  helmRepo:
+    repoName: gitlab
+    chartName: gitlab-runner
+    tag: "0.70.0"
+    cosignVerify: false
+
+  flux: {}
+  postRenderers: []
+
+  values:
+    # GitLab URL and runner token are automatically configured
+    # when gitlab.enabled=true (see templates/gitlab-runner/values.yaml)
+
+    # Runner configuration
+    runners:
+      config: |
+        [[runners]]
+          [runners.kubernetes]
+            namespace = "{{.Release.Namespace}}"
+            image = "ubuntu:22.04"
+            privileged = false
+
+    # Image
+    image:
+      registry: docker.io
+      image: gitlab/gitlab-runner
+      tag: alpine-v17.5.0
+
+    # Resources
+    resources:
+      limits:
+        memory: 256Mi
+        cpu: 500m
+      requests:
+        memory: 128Mi
+        cpu: 100m
+
+# -----------------------------------------------------------------------------
+# ArgoCD (GitOps CD)
+# -----------------------------------------------------------------------------
+argocd:
+  enabled: true
+
+  sourceType: "helmRepo"
+
+  git:
+    repo: ""
+    path: chart
+    tag: ""
+    branch: main
+    existingSecret: ""
+    credentials:
+      username: ""
+      password: ""
+      caFile: ""
+      privateKey: ""
+      publicKey: ""
+      knownHosts: ""
+
+  helmRepo:
+    repoName: argo
+    chartName: argo-cd
+    tag: "7.7.0"
+    cosignVerify: false
+
+  ingress:
+    gateway: ""
+
+  flux: {}
+  postRenderers: []
+
+  # SSO configuration
+  sso:
+    enabled: false
+    client_id: ""
+    client_secret: ""
+    provider_name: ""
+    groups: ""
+
+  # External Redis (optional)
+  redis:
+    host: ""
+    port: ""
+
+  values:
+    global:
+      domain: argocd.example.test
+      image:
+        repository: quay.io/argoproj/argocd
+        tag: "v2.13.0"
+        imagePullPolicy: IfNotPresent
+
+    # Server configuration
+    server:
+      replicas: 1
+      autoscaling:
+        enabled: false
+      ingress:
+        enabled: true
+        ingressClassName: ""
+        hosts:
+          - argocd.example.test
+        tls:
+          - secretName: argocd-tls
+            hosts:
+              - argocd.example.test
+
+    # Controller
+    controller:
+      replicas: 1
+
+    # Repo server
+    repoServer:
+      replicas: 1
+      autoscaling:
+        enabled: false
+
+    # Redis (bundled)
+    redis:
+      enabled: true
+
+    # Dex (SSO)
+    dex:
+      enabled: false
+
+    # Notifications
+    notifications:
+      enabled: false
+
+    # ApplicationSet controller
+    applicationSet:
+      enabled: true
+      replicas: 1
+
+# -----------------------------------------------------------------------------
+# n8n (Workflow Automation)
+# -----------------------------------------------------------------------------
+n8n:
+  enabled: true
+
+  sourceType: "helmRepo"
+
+  git:
+    repo: ""
+    path: chart
+    tag: ""
+    branch: main
+    existingSecret: ""
+    credentials:
+      username: ""
+      password: ""
+      caFile: ""
+      privateKey: ""
+      publicKey: ""
+      knownHosts: ""
+
+  helmRepo:
+    repoName: community-charts
+    chartName: n8n
+    tag: "1.16.13"
+    cosignVerify: false
+
+  ingress:
+    gateway: ""
+
+  flux: {}
+  postRenderers: []
+
+  # Database configuration
+  database:
+    # Options: sqlite, postgres
+    type: sqlite
+    # PostgreSQL settings (if type: postgres)
+    postgres:
+      host: ""
+      port: 5432
+      database: n8n
+      user: ""
+      password: ""
+
+  values:
+    # Image
+    image:
+      repository: n8nio/n8n
+      pullPolicy: IfNotPresent
+
+    # Resources
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+    # Ingress
+    ingress:
+      enabled: true
+      className: ""
+      hosts:
+        - host: n8n.example.test
+          paths:
+            - path: /
+              pathType: Prefix
+      tls:
+        - secretName: n8n-tls
+          hosts:
+            - n8n.example.test
+
+    # Database configuration
+    db:
+      type: sqlite
+      sqlite:
+        database: "database.sqlite"
+
+# -----------------------------------------------------------------------------
+# Elastic Stack (Elasticsearch, Kibana, Fleet, Elastic Agent)
+# -----------------------------------------------------------------------------
+# Uses ECK operator for deployment
+elasticStack:
+  enabled: true
+  namespace: elastic-stack
+
+  # Elastic Stack version
+  version: "9.2.3"
+
+  # Elasticsearch configuration
+  elasticsearch:
+    name: elasticsearch
+    replicas: 1
+    storage: 10Gi
+    # storageClassName: ""
+    disableTls: false
+    # Heap should be ~50% of memory, max 31GB for compressed OOPs
+    # Override in environment-specific overlays (e.g., overlays/harvester)
+    javaOpts: "-Xms512m -Xmx512m"
+    resources:
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+      requests:
+        memory: 1Gi
+        cpu: 500m
+    # config: {}
+    # nodeSelector: {}
+    # tolerations: []
+
+  # Kibana configuration
+  kibana:
+    name: kibana
+    replicas: 1
+    disableTls: false
+    resources:
+      limits:
+        memory: 1Gi
+        cpu: 1000m
+      requests:
+        memory: 512Mi
+        cpu: 250m
+    ingress:
+      enabled: true
+      className: traefik
+      # host: kibana.example.test
+      # tlsSecretName: kibana-tls
+      # issuerName: self-signed
+      # annotations: {}
+    # config: {}
+    # nodeSelector: {}
+    # tolerations: []
+
+  # Fleet Server configuration
+  fleetServer:
+    enabled: true
+    replicas: 1
+    disableTls: false
+    resources:
+      limits:
+        memory: 512Mi
+        cpu: 500m
+      requests:
+        memory: 256Mi
+        cpu: 100m
+    # nodeSelector: {}
+    # tolerations: []
+
+  # APM Server configuration (standalone)
+  # Enable for automatic APM data collection without Fleet UI configuration
+  apmServer:
+    enabled: true
+    replicas: 1
+    disableTls: true  # Disable TLS for internal cluster communication
+    resources:
+      limits:
+        memory: 512Mi
+        cpu: 500m
+      requests:
+        memory: 256Mi
+        cpu: 100m
+
+  # Elastic Agent configuration (DaemonSet for observability)
+  # Elastic Agent replaces Fluentbit for log collection and adds:
+  # - Container logs from /var/log/containers
+  # - Node metrics via host mounts
+  # - Kubernetes metadata enrichment
+  # - Centralized management through Fleet Server
+  elasticAgent:
+    enabled: true
+    resources:
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+      requests:
+        memory: 1Gi
+        cpu: 200m
+    # Tolerate all taints to run on every node
+    tolerations:
+      - operator: Exists
+    # nodeSelector: {}
+    # image: ""  # Override default image if needed
+
+# -----------------------------------------------------------------------------
+# OpenTelemetry Operator
+# -----------------------------------------------------------------------------
+# Provides auto-instrumentation for application tracing via EDOT (Elastic Distribution of OpenTelemetry)
+opentelemetryOperator:
+  enabled: true
+
+  sourceType: "helmRepo"
+
+  helmRepo:
+    repoName: open-telemetry
+    chartName: opentelemetry-operator
+    tag: "0.74.0"
+    cosignVerify: false
+
+  flux: {}
+  postRenderers: []
+
+  # Instrumentation configuration for Elastic APM
+  instrumentation:
+    enabled: true
+    elasticApm:
+      # APM endpoint URL - standalone APM Server
+      serverUrl: "http://apm-server-apm-http.elastic-stack.svc:8200"
+      # Secret token for authentication (optional)
+      secretToken: ""
+
+  values:
+    manager:
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+
+# -----------------------------------------------------------------------------
+# k6 Operator (Load Testing)
+# -----------------------------------------------------------------------------
+# Provides the k6 operator for running distributed load tests in Kubernetes
+# Creates TestRun CRD for defining and running k6 load tests
+k6Operator:
+  enabled: true
+
+  sourceType: "helmRepo"
+
+  helmRepo:
+    repoName: grafana-oci
+    chartName: k6-operator
+    tag: "4.2.0"
+    cosignVerify: false
+
+  flux: {}
+  postRenderers: []
+
+  values:
+    manager:
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+# -----------------------------------------------------------------------------
+# Kube State Metrics
+# -----------------------------------------------------------------------------
+# Generates Prometheus-format metrics about the state of Kubernetes objects
+# Required for Elastic Agent kubernetes integration to collect cluster metrics
+kubeStateMetrics:
+  enabled: true
+
+  sourceType: "helmRepo"
+
+  helmRepo:
+    repoName: prometheus-community
+    chartName: kube-state-metrics
+    tag: "5.27.0"
+    cosignVerify: false
+
+  flux: {}
+  postRenderers: []
+
+  values: {}
+
+# =============================================================================
+# ADDITIONAL CONFIGURATION
+# =============================================================================
+
+# Disable automatic passthrough of default values to upstream charts
+disableAutomaticPassthroughValues: false

@@ -1,0 +1,24 @@
+{{- if and (eq .Values.gitlabRunner.sourceType "git") .Values.gitlabRunner.enabled }}
+{{- $gitCredsDict := dict
+  "name" "gitlab-runner"
+  "packageGitScope" .Values.gitlabRunner.git
+  "rootScope" .
+  "releaseName" .Release.Name
+}}
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: gitlab-runner
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: gitlab-runner
+    app.kubernetes.io/component: "developer-tools"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  interval: {{ .Values.flux.interval }}
+  url: {{ .Values.gitlabRunner.git.repo }}
+  ref:
+    {{- include "validRef" .Values.gitlabRunner.git | nindent 4 }}
+  {{ include "gitIgnore" . }}
+  {{- include "gitCredsExtended" $gitCredsDict | nindent 2 }}
+{{- end }}

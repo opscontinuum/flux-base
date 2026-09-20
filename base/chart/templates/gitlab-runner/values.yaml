@@ -1,0 +1,94 @@
+{{- if .Values.gitlabRunner.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.gitlabRunner "name" "gitlab-runner" "defaults" (include "opsc.defaults.gitlab-runner" .)) }}
+{{- end }}
+
+{{- define "opsc.defaults.gitlab-runner" -}}
+# GitLab Runner default values
+{{- $domainName := default .Values.domain .Values.hostname }}
+
+# GitLab URL - connect to GitLab instance
+{{- if .Values.gitlab.enabled }}
+gitlabUrl: https://gitlab.{{ $domainName }}
+
+# Runner token from GitLab secret
+runnerToken: ""
+runners:
+  secret: gitlab-gitlab-runner-secret
+  secretNamespace: gitlab
+{{- end }}
+
+# Image configuration
+image:
+  registry: docker.io
+  image: gitlab/gitlab-runner
+  tag: alpine-v17.5.0
+
+{{- if (include "imagePullSecret" .) }}
+imagePullSecrets:
+  - name: private-registry
+{{- end }}
+
+# Replicas
+replicas: 1
+
+# Resources
+resources:
+  limits:
+    memory: 256Mi
+    cpu: 500m
+  requests:
+    memory: 128Mi
+    cpu: 100m
+
+# RBAC
+rbac:
+  create: true
+  clusterWideAccess: false
+
+# Runner configuration
+runners:
+  # Run untagged jobs
+  runUntagged: true
+
+  # Protected branches only
+  protected: false
+
+  # Executor
+  executor: kubernetes
+
+  # Config template
+  config: |
+    [[runners]]
+      [runners.kubernetes]
+        namespace = "{{`{{.Release.Namespace}}`}}"
+        image = "ubuntu:22.04"
+        privileged = false
+        cpu_limit = "1"
+        memory_limit = "1Gi"
+        cpu_request = "100m"
+        memory_request = "256Mi"
+        [runners.kubernetes.pod_security_context]
+          run_as_non_root = true
+          run_as_user = 1000
+
+# Service account
+serviceAccount:
+  create: true
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 100
+  fsGroup: 65533
+
+# Security context
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  privileged: false
+  capabilities:
+    drop:
+      - ALL
+
+{{- end -}}

@@ -1,0 +1,10 @@
+{{- if .Values.elasticStack.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.elasticStack.namespace | default "elastic-stack" }}
+  labels:
+    app.kubernetes.io/name: elastic-stack
+    app.kubernetes.io/component: "logging"
+    {{- include "commonLabels" . | nindent 4 }}
+{{- end }}

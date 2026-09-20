@@ -1,0 +1,16 @@
+{{- if .Values.kubeStateMetrics.enabled }}
+# ExternalName service to allow resolution of kube-state-metrics without namespace
+# Required for Elastic Agent which uses hostNetwork and cannot resolve short service names
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: default
+  labels:
+    app.kubernetes.io/name: kube-state-metrics
+    app.kubernetes.io/component: "monitoring"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  type: ExternalName
+  externalName: kube-state-metrics.kube-system.svc.cluster.local
+{{- end }}

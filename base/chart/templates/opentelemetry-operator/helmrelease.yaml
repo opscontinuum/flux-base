@@ -1,0 +1,45 @@
+{{- if .Values.opentelemetryOperator.enabled }}
+{{- $packageFlux := default dict .Values.opentelemetryOperator.flux -}}
+{{- $fluxSettings := merge $packageFlux .Values.flux -}}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: opentelemetry-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: opentelemetry-operator
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/opentelemetry-operator/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: opentelemetry-operator-system
+  releaseName: opentelemetry-operator
+  chart:
+    spec:
+      chart: {{ .Values.opentelemetryOperator.helmRepo.chartName }}
+      version: {{ .Values.opentelemetryOperator.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.opentelemetryOperator.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.opentelemetryOperator.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.opentelemetryOperator.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-opentelemetry-operator-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-opentelemetry-operator-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-opentelemetry-operator-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}

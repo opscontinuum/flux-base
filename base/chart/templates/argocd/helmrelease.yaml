@@ -1,0 +1,58 @@
+{{- $fluxSettings := merge .Values.argocd.flux .Values.flux -}}
+{{- if .Values.argocd.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: argocd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: argocd
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/argocd/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: argocd
+  chart:
+    spec:
+      {{- if eq .Values.argocd.sourceType "git" }}
+      chart: {{ .Values.argocd.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: argocd
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.argocd.helmRepo.chartName }}
+      version: {{ .Values.argocd.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.argocd.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.argocd.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.argocd.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.argocd.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.argocd.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.argocd.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-argocd-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-argocd-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-argocd-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}

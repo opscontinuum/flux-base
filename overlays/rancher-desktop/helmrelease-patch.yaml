@@ -1,0 +1,97 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: opsc
+  namespace: flux-system
+spec:
+  values:
+    # =============================================================================
+    # RANCHER DESKTOP OVERLAY
+    # =============================================================================
+    # Local development environment using Rancher Desktop's built-in Traefik.
+    # Optimized for single-node local development with reduced resource usage.
+    # =============================================================================
+
+    # -----------------------------------------------------------------------------
+    # Global Configuration
+    # -----------------------------------------------------------------------------
+    domain: dev.yourdomain.local
+    clusterIssuer: self-signed
+
+    # -----------------------------------------------------------------------------
+    # Ingress Controller
+    # -----------------------------------------------------------------------------
+    # Rancher Desktop includes Traefik by default - no need to deploy our own
+    traefik:
+      enabled: false
+
+    # -----------------------------------------------------------------------------
+    # Load Balancer
+    # -----------------------------------------------------------------------------
+    # Not needed - Rancher Desktop uses hostNetwork for ingress
+    metallb:
+      enabled: false
+
+    # -----------------------------------------------------------------------------
+    # Resource Limits (Lighter for Local Development)
+    # -----------------------------------------------------------------------------
+    elasticStack:
+      enabled: true
+      elasticsearch:
+        replicas: 1
+        storage: 5Gi
+        resources:
+          limits:
+            memory: 1Gi
+            cpu: 500m
+          requests:
+            memory: 512Mi
+            cpu: 250m
+      kibana:
+        replicas: 1
+        resources:
+          limits:
+            memory: 1Gi
+            cpu: 1000m
+          requests:
+            memory: 768Mi
+            cpu: 250m
+
+    # -----------------------------------------------------------------------------
+    # Package-specific domain overrides
+    # -----------------------------------------------------------------------------
+    # These override the hardcoded domains in the base values.yaml
+    gitlab:
+      enabled: true
+      values:
+        global:
+          hosts:
+            domain: dev.yourdomain.local
+
+    argocd:
+      enabled: true
+      values:
+        global:
+          domain: argocd.dev.yourdomain.local
+        server:
+          ingress:
+            hosts:
+              - argocd.dev.yourdomain.local
+            tls:
+              - secretName: argocd-tls
+                hosts:
+                  - argocd.dev.yourdomain.local
+
+    n8n:
+      enabled: true
+      values:
+        ingress:
+          hosts:
+            - host: n8n.dev.yourdomain.local
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: n8n-tls
+              hosts:
+                - n8n.dev.yourdomain.local

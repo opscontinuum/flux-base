@@ -1,0 +1,129 @@
+{{- if .Values.gitlab.enabled }}
+{{- $pgPassword := required "gitlab.postgresqlPassword is required - set a strong password before deploying (see README)" .Values.gitlab.postgresqlPassword }}
+{{- $pgSuperPassword := required "gitlab.postgresqlPostgresPassword is required - set a strong password before deploying (see README)" .Values.gitlab.postgresqlPostgresPassword }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-postgresql-password
+  namespace: gitlab
+  labels:
+    app.kubernetes.io/name: gitlab-postgresql
+    {{- include "commonLabels" . | nindent 4 }}
+type: Opaque
+stringData:
+  postgresql-password: {{ $pgPassword | quote }}
+  postgresql-postgres-password: {{ $pgSuperPassword | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitlab-postgresql-init
+  namespace: gitlab
+  labels:
+    app.kubernetes.io/name: gitlab-postgresql
+    {{- include "commonLabels" . | nindent 4 }}
+data:
+  init.sql: |
+    CREATE DATABASE gitlabhq_production;
+    CREATE USER gitlab WITH ENCRYPTED PASSWORD '{{ $pgPassword }}';
+    GRANT ALL PRIVILEGES ON DATABASE gitlabhq_production TO gitlab;
+    ALTER DATABASE gitlabhq_production OWNER TO gitlab;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-postgresql
+  namespace: gitlab
+  labels:
+    app.kubernetes.io/name: gitlab-postgresql
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+      name: postgresql
+  selector:
+    app.kubernetes.io/name: gitlab-postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: gitlab-postgresql
+  namespace: gitlab
+  labels:
+    app.kubernetes.io/name: gitlab-postgresql
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  serviceName: gitlab-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gitlab-postgresql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gitlab-postgresql
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgresql
+          image: postgres:14-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgresql
+          env:
+            - name: POSTGRES_USER
+              value: gitlab
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gitlab-postgresql-password
+                  key: postgresql-password
+            - name: POSTGRES_DB
+              value: gitlabhq_production
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            limits:
+              memory: 1Gi
+              cpu: 1000m
+            requests:
+              memory: 256Mi
+              cpu: 100m
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - gitlab
+                - -d
+                - gitlabhq_production
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - gitlab
+                - -d
+                - gitlabhq_production
+            initialDelaySeconds: 5
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 8Gi
+{{- end }}

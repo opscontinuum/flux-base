@@ -1,0 +1,58 @@
+{{- $fluxSettings := merge .Values.certManager.flux .Values.flux -}}
+{{- if .Values.certManager.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: "core"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/cert-manager/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: cert-manager
+  chart:
+    spec:
+      {{- if eq .Values.certManager.sourceType "git" }}
+      chart: {{ .Values.certManager.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: cert-manager
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.certManager.helmRepo.chartName }}
+      version: {{ .Values.certManager.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.certManager.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.certManager.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.certManager.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.certManager.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.certManager.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.certManager.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-cert-manager-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-cert-manager-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-cert-manager-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}

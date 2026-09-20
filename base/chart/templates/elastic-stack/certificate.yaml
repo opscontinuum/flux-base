@@ -1,0 +1,23 @@
+{{- if and .Values.elasticStack.enabled .Values.elasticStack.kibana.ingress.enabled .Values.certManager.enabled }}
+{{- $domainName := default .Values.domain .Values.hostname }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kibana-tls
+  namespace: {{ .Values.elasticStack.namespace | default "elastic-stack" }}
+  labels:
+    app.kubernetes.io/name: kibana
+    app.kubernetes.io/component: "logging"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+spec:
+  secretName: {{ .Values.elasticStack.kibana.ingress.tlsSecretName | default "kibana-tls" }}
+  issuerRef:
+    name: {{ .Values.elasticStack.kibana.ingress.issuerName | default .Values.clusterIssuer | default "self-signed" }}
+    kind: ClusterIssuer
+  commonName: {{ .Values.elasticStack.kibana.ingress.host | default (printf "kibana.%s" $domainName) }}
+  dnsNames:
+    - {{ .Values.elasticStack.kibana.ingress.host | default (printf "kibana.%s" $domainName) }}
+{{- end }}

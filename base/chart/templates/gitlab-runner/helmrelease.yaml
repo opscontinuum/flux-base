@@ -1,0 +1,65 @@
+{{- $fluxSettings := merge .Values.gitlabRunner.flux .Values.flux -}}
+{{- if .Values.gitlabRunner.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gitlab-runner
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: gitlab-runner
+    app.kubernetes.io/component: "developer-tools"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/gitlab-runner/values.yaml") . | sha256sum }}
+spec:
+  releaseName: gitlab-runner
+  targetNamespace: gitlab-runner
+  chart:
+    spec:
+      {{- if eq .Values.gitlabRunner.sourceType "git" }}
+      chart: {{ .Values.gitlabRunner.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: gitlab-runner
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.gitlabRunner.helmRepo.chartName }}
+      version: {{ .Values.gitlabRunner.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.gitlabRunner.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.gitlabRunner.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.gitlabRunner.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.gitlabRunner.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.gitlabRunner.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.gitlabRunner.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-gitlab-runner-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-gitlab-runner-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-gitlab-runner-values
+      kind: Secret
+      valuesKey: "overlays"
+
+  dependsOn:
+    {{- if .Values.gitlab.enabled }}
+    - name: gitlab
+      namespace: {{ .Release.Namespace }}
+    {{- end }}
+{{- end }}
