@@ -1,59 +1,59 @@
 # OpsContinuum Chart
 
-🔴 **This repository is public.** Your real domain, your real ACME contact
+**This repository is public.** Your real domain, your real ACME contact
 email, your real registry credentials and the passwords for the bundled
 GitLab PostgreSQL and Redis instances go in a gitignored local overlay only
 (`values.local.yaml`, or `overlays/<env>/values.local.yaml`) and are never
 committed here, to this repository or to any fork of it. Start from
-`values.local.yaml.example`. See "Setting real values locally" below for the
-exact mechanism, and consider enabling the pre-commit guardrail described
-there too.
+`values.local.yaml.example`. "Setting real values locally" below gives the
+exact mechanism, and the pre-commit guardrail described there is worth
+enabling.
 
-A curated Kubernetes platform deployment using GitOps (FluxCD) that includes:
+A Kubernetes platform deployment using GitOps (FluxCD). It includes:
 
-- **Cert-Manager** - TLS certificate management
-- **ECK Operator 3.x** - Elastic Cloud on Kubernetes (supports Elastic 9.x)
-- **Elastic Stack 9.x** - Elasticsearch, Kibana, Fleet Server, Elastic Agent, APM Server
-- **OpenTelemetry Operator** - Auto-instrumentation for distributed tracing
-- **GitLab** - DevOps platform (CE edition)
-- **GitLab Runner** - CI/CD runner
-- **ArgoCD** - GitOps continuous delivery
-- **n8n** - Workflow automation
+- cert-manager, for TLS certificate management
+- ECK Operator 3.x, Elastic Cloud on Kubernetes (supports Elastic 9.x)
+- Elastic Stack 9.x: Elasticsearch, Kibana, Fleet Server, Elastic Agent, APM Server
+- OpenTelemetry Operator, for auto-instrumentation and distributed tracing
+- GitLab CE
+- GitLab Runner
+- Argo CD
+- n8n workflow automation
 
 ---
 
 ## What this is
 
-This repository is the **Flux layer**: a single Helm chart, deployed by FluxCD, that
-bootstraps the underlying platform *capability* of a Kubernetes cluster. It is not an
-application repository, and it does not describe the workloads that eventually run on
-the cluster.
+This repository is the Flux layer: a single Helm chart, deployed by FluxCD,
+that bootstraps the underlying platform capability of a Kubernetes cluster. It
+is not an application repository, and it does not describe the workloads that
+eventually run on the cluster.
 
 ### The boundary: Flux owns capability, Argo owns instances
 
-This chart deploys ArgoCD as one of its packages, and that is a deliberate boundary,
-not an accident:
+This chart deploys Argo CD as one of its packages. That boundary is deliberate:
 
-- **Flux (this repository) owns capability.** It reconciles the platform itself:
-  ingress, certificates, logging, CI/CD infrastructure, and ArgoCD as a piece of
-  platform tooling. Changes here answer the question "what can this cluster do?"
-- **Argo CD owns instances.** Once ArgoCD is running, it takes over managing the
-  application workloads deployed on top of the platform, through its own
-  Application/ApplicationSet sources. Changes there answer the question "what is
-  actually running right now?"
+- Flux (this repository) owns capability. It reconciles the platform itself:
+  ingress, certificates, logging, CI/CD infrastructure, and Argo CD as a piece
+  of platform tooling. Changes here answer the question "what can this cluster
+  do?"
+- Argo CD owns instances. Once Argo CD is running, it manages the application
+  workloads deployed on top of the platform, through its own Application and
+  ApplicationSet sources. Changes there answer the question "what is running
+  right now?"
 
-Do not add application-specific manifests to this repository. Application state
-belongs in ArgoCD-managed sources, once the platform capability that this chart
-provides exists.
+Do not add application-specific manifests to this repository. Application
+state belongs in Argo CD-managed sources, once the platform capability this
+chart provides exists.
 
 ---
 
 ## Before you deploy
 
-The chart ships with **no defaults** for the values below. Rendering fails loudly
-with a clear error until each one is set, rather than silently deploying against
-somebody else's domain, email address, or a default password shipped in a public
-chart. Set these first:
+The chart ships with no defaults for the values below. Rendering fails with a
+clear error until each one is set, rather than silently deploying against
+somebody else's domain, email address, or a default password shipped in a
+public chart. Set these first:
 
 | Value | Purpose |
 |-------|---------|
@@ -69,31 +69,37 @@ Generate strong passwords with, for example:
 openssl rand -base64 24
 ```
 
-See "Setting real values locally" below for where these actually go. They do not
-belong in this public tree.
+"Setting real values locally" below says where these go. They do not belong in
+this public tree.
 
 ---
 
-## Environment Overlays
+## Environment overlays
 
-This chart uses **Kustomize overlays** for multi-environment support. Choose the overlay that matches your deployment target:
+The chart uses Kustomize overlays for multi-environment support. Choose the
+overlay that matches your deployment target:
 
-| Environment | Overlay Path | Description |
+| Environment | Overlay path | Description |
 |-------------|--------------|-------------|
-| **Rancher Desktop** | `overlays/rancher-desktop` | Local development with built-in Traefik |
-| **Harvester** | `overlays/harvester` | Harvester HCI cluster with Traefik (secondary) + MetalLB |
+| Rancher Desktop | `overlays/rancher-desktop` | Local development with built-in Traefik |
+| Harvester | `overlays/harvester` | Harvester HCI cluster with Traefik (secondary) + MetalLB |
 
-### Harvester Architecture Note
+### Harvester architecture note
 
-> **IMPORTANT:** Harvester uses a built-in nginx ingress controller on ports 80/443 for the Harvester admin UI. **DO NOT replace or disable nginx** - doing so will break the Harvester admin interface.
->
-> The Harvester overlay deploys Traefik as a **secondary** ingress controller that runs alongside nginx:
-> - **nginx** remains on the node's primary IP (ports 80/443) for Harvester admin
-> - **Traefik** gets a separate LoadBalancer IP from MetalLB for your applications
->
-> This dual-ingress setup keeps Harvester functional while providing Traefik for your workloads.
+Harvester runs its own nginx ingress controller on ports 80/443 for the
+Harvester admin UI. Do not replace or disable nginx; doing so breaks the
+Harvester admin interface.
 
-### Repository Structure
+The Harvester overlay deploys Traefik as a secondary ingress controller that
+runs alongside nginx:
+
+- nginx stays on the node's primary IP (ports 80/443) for Harvester admin
+- Traefik gets a separate LoadBalancer IP from MetalLB for your applications
+
+This dual-ingress setup keeps Harvester working while providing Traefik for
+your workloads.
+
+### Repository structure
 
 ```
 base/                           # Base Kustomize resources (do not deploy directly)
@@ -113,12 +119,14 @@ overlays/
     └── helmrelease-patch.yaml  # Harvester specific settings (edit this!)
 ```
 
-### Configuring Your Environment
+### Configuring your environment
 
-1. **Choose your overlay** based on your target cluster
-2. **Edit the overlay's `helmrelease-patch.yaml`** to set your domain and other settings
+1. Choose your overlay based on your target cluster.
+2. Edit the overlay's `helmrelease-patch.yaml` to set your domain and other
+   settings.
 
-**For Harvester** (`overlays/harvester/helmrelease-patch.yaml`):
+For Harvester (`overlays/harvester/helmrelease-patch.yaml`):
+
 ```yaml
 # Replace yourdomain.local with your domain
 domain: yourdomain.local
@@ -130,32 +138,35 @@ metallb:
       - "192.168.1.240-192.168.1.250"  # Your network's available IPs
 ```
 
-**For Rancher Desktop** (`overlays/rancher-desktop/helmrelease-patch.yaml`):
+For Rancher Desktop (`overlays/rancher-desktop/helmrelease-patch.yaml`):
+
 ```yaml
 # Local development domain (uses hosts file)
 domain: dev.yourdomain.local
 ```
 
-### Hosts File Setup
+### Hosts file setup
 
-For local development or when DNS is not configured, add entries to your hosts file.
+For local development, or when DNS is not configured, add entries to your
+hosts file.
 
 #### Windows
 
-1. Open Notepad **as Administrator** (right-click -> "Run as administrator")
-2. Open File -> Open and navigate to `C:\Windows\System32\drivers\etc\hosts`
-3. Add the entries below and save
+1. Open Notepad as Administrator (right-click, "Run as administrator").
+2. File, Open, then navigate to `C:\Windows\System32\drivers\etc\hosts`.
+3. Add the entries below and save.
 
-#### Linux / macOS
+#### Linux and macOS
 
 ```bash
 sudo nano /etc/hosts
 # Add entries below, then Ctrl+O to save, Ctrl+X to exit
 ```
 
-#### Hosts Entries
+#### Hosts entries
 
-**For Rancher Desktop (dev.yourdomain.local):**
+For Rancher Desktop (`dev.yourdomain.local`):
+
 ```
 127.0.0.1 argocd.dev.yourdomain.local
 127.0.0.1 gitlab.dev.yourdomain.local
@@ -166,7 +177,8 @@ sudo nano /etc/hosts
 127.0.0.1 kibana.dev.yourdomain.local
 ```
 
-**For Harvester (using MetalLB IP):**
+For Harvester (using the MetalLB IP):
+
 ```
 # Replace 192.168.1.240 with your MetalLB assigned IP (check with: kubectl get svc -n traefik)
 192.168.1.240 argocd.yourdomain.local
@@ -180,29 +192,30 @@ sudo nano /etc/hosts
 
 ---
 
-## Quick Start
+## Quick start
 
 ### Prerequisites
 
-- **Kubernetes Cluster** (v1.28+) - Rancher Desktop, k3s, or compatible
-- **Traefik Ingress Controller** (included with k3s/Rancher Desktop, deployed via overlay for Harvester)
-- **kubectl** configured to access your cluster
-- **helm** (v3.x)
+- A Kubernetes cluster (v1.28+): Rancher Desktop, k3s, or compatible
+- The Traefik ingress controller (included with k3s and Rancher Desktop; deployed via the overlay for Harvester)
+- `kubectl` configured to access your cluster
+- `helm` (v3.x)
 
-### Create Your Own Repository
+### Create your own repository
 
-**Important:** Create your own copy of this chart. You will configure your deployment in your repository, and real values never belong in a public repository.
+Create your own copy of this chart. You configure your deployment in your
+repository, and real values never belong in a public one.
 
-**Option A: Fork on GitHub**
+Option A, fork on GitHub:
 
-1. Click "Fork" on GitHub to create your own copy
+1. Click "Fork" on GitHub to create your own copy.
 2. Clone your fork:
    ```bash
    git clone https://github.com/YOUR_USERNAME/YOUR_FORK.git
    cd YOUR_FORK
    ```
 
-**Option B: Create a new repository**
+Option B, create a new repository:
 
 ```bash
 # Clone this repository
@@ -219,7 +232,7 @@ git push -u origin main
 
 ---
 
-## Step 1: Install FluxCD
+## Step 1: install FluxCD
 
 ```bash
 kubectl apply -f https://github.com/fluxcd/flux2/releases/latest/download/install.yaml
@@ -229,19 +242,20 @@ kubectl -n flux-system rollout status deployment/helm-controller
 kubectl -n flux-system rollout status deployment/source-controller
 ```
 
-## Step 2: Install ECK CRDs
+## Step 2: install the ECK CRDs
 
-The Elastic Stack requires ECK Operator CRDs:
+The Elastic Stack requires the ECK Operator CRDs:
 
 ```bash
 kubectl create -f https://download.elastic.co/downloads/eck/3.2.0/crds.yaml
 ```
 
-## Step 3: Create Required Secrets
+## Step 3: create the required secrets
 
-**These secrets must be created before deploying the chart. Real credentials never belong in git.**
+These secrets must exist before the chart deploys. Real credentials never
+belong in git.
 
-### Option A: Let's Encrypt with Cloudflare (Production)
+### Option A: Let's Encrypt with Cloudflare (production)
 
 ```bash
 # Create cert-manager namespace
@@ -254,11 +268,12 @@ kubectl create secret generic cloudflare-api-token \
 ```
 
 To create a Cloudflare API token:
-1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com) -> My Profile -> API Tokens
-2. Create token with permissions: `Zone:Zone:Read` and `Zone:DNS:Edit`
-3. Zone Resources: Include -> Specific zone -> your domain
 
-### Option B: Let's Encrypt with Route53 (Production)
+1. Go to the [Cloudflare Dashboard](https://dash.cloudflare.com), My Profile, API Tokens.
+2. Create a token with permissions `Zone:Zone:Read` and `Zone:DNS:Edit`.
+3. Zone Resources: Include, Specific zone, your domain.
+
+### Option B: Let's Encrypt with Route53 (production)
 
 ```bash
 kubectl create namespace cert-manager
@@ -269,16 +284,16 @@ kubectl create secret generic route53-credentials \
   --from-literal=secret-access-key=YOUR_SECRET_KEY
 ```
 
-### Option C: Self-Signed Certificates (Development)
+### Option C: self-signed certificates (development)
 
-No secrets required. Self-signed CA is created automatically.
+No secrets required. A self-signed CA is created automatically.
 
-## Step 4: Configure Your Deployment
+## Step 4: configure your deployment
 
 Edit the appropriate overlay's `helmrelease-patch.yaml`:
 
-**For Rancher Desktop:** `overlays/rancher-desktop/helmrelease-patch.yaml`
-**For Harvester:** `overlays/harvester/helmrelease-patch.yaml`
+- Rancher Desktop: `overlays/rancher-desktop/helmrelease-patch.yaml`
+- Harvester: `overlays/harvester/helmrelease-patch.yaml`
 
 ```yaml
 # Set your domain
@@ -299,7 +314,7 @@ gitlab:
   redisPassword: "generate with: openssl rand -base64 24"
 ```
 
-### Enable/Disable Components
+### Enable or disable components
 
 ```yaml
 certManager:
@@ -324,7 +339,7 @@ n8n:
   enabled: true
 ```
 
-**Commit and push your configuration changes:**
+Commit and push your configuration changes:
 
 ```bash
 git add overlays/
@@ -332,14 +347,14 @@ git commit -m "Configure for my environment"
 git push origin main
 ```
 
-## Step 5: Create FluxCD Resources
+## Step 5: create the FluxCD resources
 
-> **The GitRepository and Kustomization resources must be named `opsc` exactly.**
-> The HelmRelease templates reference this name in their `sourceRef`. Renaming
-> the resource without updating every reference means Flux reconciles nothing,
-> silently, with no error to point you back here.
+The GitRepository and Kustomization resources must be named `opsc` exactly.
+The HelmRelease templates reference this name in their `sourceRef`. Renaming
+the resource without updating every reference means Flux reconciles nothing,
+silently, with no error to point you back here.
 
-### Create GitRepository
+### Create the GitRepository
 
 For public repositories:
 
@@ -384,9 +399,9 @@ spec:
 EOF
 ```
 
-### Create Kustomization (for overlay deployment)
+### Create the Kustomization (for overlay deployment)
 
-**For Rancher Desktop:**
+For Rancher Desktop:
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -405,7 +420,7 @@ spec:
 EOF
 ```
 
-**For Harvester:**
+For Harvester:
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -424,7 +439,7 @@ spec:
 EOF
 ```
 
-## Step 6: Monitor Deployment
+## Step 6: monitor the deployment
 
 ```bash
 # Watch Kustomizations reconcile
@@ -438,24 +453,24 @@ kubectl annotate gitrepository opsc -n flux-system \
   reconcile.fluxcd.io/requestedAt="$(date +%s)" --overwrite
 ```
 
-### Expected Deployment Order
+### Expected deployment order
 
-1. cert-manager -> Ready
-2. eck-operator -> Ready
-3. elastic-stack, opentelemetry-operator, argocd, n8n -> Ready (parallel)
-4. gitlab -> Ready (takes 5-10 minutes)
-5. gitlab-runner -> Ready
+1. cert-manager becomes Ready.
+2. eck-operator becomes Ready.
+3. elastic-stack, opentelemetry-operator, argocd and n8n become Ready, in parallel.
+4. gitlab becomes Ready (takes 5 to 10 minutes).
+5. gitlab-runner becomes Ready.
 
-## Step 7: Access Services
+## Step 7: access the services
 
 | Service | URL | Credentials |
 |---------|-----|-------------|
-| ArgoCD | https://argocd.dev.yourdomain.local | `admin` / see below |
+| Argo CD | https://argocd.dev.yourdomain.local | `admin` / see below |
 | GitLab | https://gitlab.dev.yourdomain.local | `root` / see below |
 | Kibana | https://kibana.dev.yourdomain.local | `elastic` / see below |
 | n8n | https://n8n.dev.yourdomain.local | Create on first login |
 
-### Get Credentials
+### Get credentials
 
 ```bash
 # ArgoCD admin password
@@ -475,11 +490,11 @@ kubectl -n elastic-stack get secret elasticsearch-es-elastic-user \
 
 ## Setting real values locally
 
-**⚠️ WARNING: this repository is public. Your real domain, your real ACME contact
-email, your real registry credentials, and the passwords for the bundled GitLab
-PostgreSQL and Redis instances are real values that must never be committed or
-pushed here, to this repository or to any fork of it. They go in a gitignored
-local overlay only, as an instruction, not a suggestion.**
+**This repository is public. Your real domain, your real ACME contact email,
+your real registry credentials, and the passwords for the bundled GitLab
+PostgreSQL and Redis instances are real values that must never be committed
+or pushed here, to this repository or to any fork of it. They go in a
+gitignored local overlay only. That is an instruction, not a suggestion.**
 
 Copy the committed example to a gitignored file, either at the repository root
 or per environment, and fill in your own values:
@@ -496,7 +511,7 @@ every variation `.gitignore` lists (`.yml`, hyphenated, `.bak`) are already
 excluded, at any path. Do not rename it to something `.gitignore` does not
 list, or the exclusion stops applying.
 
-Render locally with (`helm template`, `helm lint`; contacts nothing):
+Render locally (`helm template`, `helm lint`; contacts nothing):
 
 ```bash
 helm template ./base/chart \
@@ -505,7 +520,7 @@ helm template ./base/chart \
 ```
 
 For a real deployment straight from Helm, bypassing Flux (Flux itself reads
-only from git, so a gitignored file cannot reach it: see the note below):
+only from git, so a gitignored file cannot reach it; see the note below):
 
 ```bash
 helm upgrade --install opsc ./base/chart \
@@ -515,16 +530,16 @@ helm upgrade --install opsc ./base/chart \
 ```
 
 To review, offline, exactly what the kustomize overlay for an environment
-resolves to, before FluxCD or a human ever applies it (renders locally,
-contacts no cluster):
+resolves to, before FluxCD or a human applies it (renders locally, contacts no
+cluster):
 
 ```bash
 kubectl kustomize overlays/<your-environment>
 ```
 
 If your real GitOps deployment needs these values committed somewhere for
-Flux to read, keep that in a **separate, private** repository, or in a
-Kubernetes Secret referenced by your overlay, never in this public tree.
+Flux to read, keep that in a separate, private repository, or in a Kubernetes
+Secret referenced by your overlay. Never in this public tree.
 
 ### Guardrail: a pre-commit hook
 
@@ -540,7 +555,7 @@ git config core.hooksPath .githooks
 ```
 
 Optionally, list your own real domain, registry host, and node or cluster
-names for it to also check for:
+names for it to check for as well:
 
 ```bash
 cp .githooks/banned-identifiers.local.txt.example .githooks/banned-identifiers.local.txt
@@ -549,19 +564,21 @@ cp .githooks/banned-identifiers.local.txt.example .githooks/banned-identifiers.l
 
 ---
 
-## Secrets Reference
+## Secrets reference
 
-All secrets are created in-cluster using `kubectl`. **Never commit secrets to git.**
+All secrets are created in-cluster with `kubectl`. Never commit secrets to
+git.
 
-| Secret | Namespace | Purpose | When Required |
+| Secret | Namespace | Purpose | When required |
 |--------|-----------|---------|---------------|
 | `cloudflare-api-token` | cert-manager | Cloudflare DNS-01 challenge | Let's Encrypt with Cloudflare |
 | `route53-credentials` | cert-manager | Route53 DNS-01 challenge | Let's Encrypt with Route53 |
 | `opsc-git-auth` | flux-system | Private git repository access | Private repos only |
 
-### Secrets Created Automatically
+### Secrets created automatically
 
-These secrets are created by the chart and do not require manual setup, other than the required values listed under "Before you deploy":
+The chart creates these itself. They need no manual setup beyond the required
+values listed under "Before you deploy":
 
 | Secret | Namespace | Purpose |
 |--------|-----------|---------|
@@ -569,12 +586,12 @@ These secrets are created by the chart and do not require manual setup, other th
 | `gitlab-postgresql-password` | gitlab | Bundled PostgreSQL credentials (from `gitlab.postgresqlPassword`) |
 | `gitlab-redis-password` | gitlab | Bundled Redis credentials (from `gitlab.redisPassword`) |
 | `elasticsearch-es-elastic-user` | elastic-stack | Elasticsearch admin password |
-| `argocd-argocd-initial-admin-secret` | argocd | ArgoCD admin password |
+| `argocd-argocd-initial-admin-secret` | argocd | Argo CD admin password |
 | `gitlab-gitlab-initial-root-password` | gitlab | GitLab root password |
 
 ---
 
-## Updating Your Deployment
+## Updating your deployment
 
 With GitOps, updates are automatic:
 
@@ -592,16 +609,16 @@ kubectl annotate gitrepository opsc -n flux-system \
 
 ---
 
-## Resource Requirements
+## Resource requirements
 
-Minimum recommended resources (all components enabled):
+Minimum recommended resources with all components enabled:
 
-| Component | CPU Request | Memory Request | Memory Limit | Notes |
+| Component | CPU request | Memory request | Memory limit | Notes |
 |-----------|-------------|----------------|--------------|-------|
 | cert-manager | 50m | 64Mi | 128Mi | |
 | eck-operator | 100m | 150Mi | 256Mi | |
 | elasticsearch | 500m | 1Gi | 2Gi | Single node; increase for HA |
-| kibana | 250m | 768Mi | 1Gi | **Requires 768Mi+ to start** |
+| kibana | 250m | 768Mi | 1Gi | Requires 768Mi or more to start |
 | apm-server | 100m | 256Mi | 512Mi | |
 | fleet-server | 100m | 256Mi | 512Mi | |
 | elastic-agent | 200m | 512Mi | 1Gi | |
@@ -611,29 +628,32 @@ Minimum recommended resources (all components enabled):
 | argocd | 250m | 256Mi | 512Mi | |
 | n8n | 100m | 256Mi | 512Mi | |
 
-**Minimum Total:** ~3 CPU cores, ~8GB RAM
+Minimum total: about 3 CPU cores and about 8GB RAM.
 
-> **Important:** Kibana 9.x requires at least 768Mi of memory to start successfully. The default 512Mi limit will cause OOM (out of memory) crashes. The overlays are configured with appropriate limits, but if you customise resources, ensure Kibana has sufficient memory.
+Kibana 9.x needs at least 768Mi of memory to start. The default 512Mi limit
+causes OOM (out of memory) crashes. The overlays are configured with
+appropriate limits, but if you customise resources, make sure Kibana keeps
+enough memory.
 
-### Environment-Specific Resources
+### Environment-specific resources
 
 The overlays configure different resource allocations:
 
-- **Rancher Desktop:** Lighter resources for local development (~8GB RAM total)
-- **Harvester:** Production-ready resources for cluster deployment (~16GB+ RAM recommended)
+- Rancher Desktop: lighter resources for local development (about 8GB RAM total)
+- Harvester: production-ready resources for cluster deployment (16GB+ RAM recommended)
 
 ---
 
 ## Troubleshooting
 
-### Check Kustomization Status
+### Check Kustomization status
 
 ```bash
 kubectl get kustomizations -A
 kubectl describe kustomization opsc -n flux-system
 ```
 
-### Check Flux Logs
+### Check Flux logs
 
 ```bash
 kubectl logs -n flux-system deployment/kustomize-controller
@@ -647,14 +667,14 @@ kubectl get clusterissuers
 kubectl describe clusterissuer self-signed
 ```
 
-### Check Certificates
+### Check certificates
 
 ```bash
 kubectl get certificates -A
 kubectl describe certificate <name> -n <namespace>
 ```
 
-### Force Reconciliation
+### Force reconciliation
 
 ```bash
 # Reconcile git source
@@ -690,38 +710,30 @@ kubectl delete namespace cert-manager eck-operator gitlab gitlab-runner \
 
 ## Architecture
 
-### Namespace Layout
+### Namespace layout
 
-```
-flux-system                    - FluxCD controllers + Kustomizations
-cert-manager                   - Certificate management
-eck-operator                   - ECK Operator 3.x
-elastic-stack                  - Elasticsearch, Kibana, Fleet, Agent, APM
-opentelemetry-operator-system  - OpenTelemetry Operator
-gitlab                         - GitLab CE + PostgreSQL + Redis + MinIO
-gitlab-runner                  - GitLab Runner
-argocd                         - ArgoCD (platform capability; owns application instances once deployed)
-n8n                            - n8n workflow automation
-```
+| Namespace | Holds |
+|-----------|-------|
+| `flux-system` | FluxCD controllers and Kustomizations |
+| `cert-manager` | Certificate management |
+| `eck-operator` | ECK Operator 3.x |
+| `elastic-stack` | Elasticsearch, Kibana, Fleet, Agent, APM |
+| `opentelemetry-operator-system` | OpenTelemetry Operator |
+| `gitlab` | GitLab CE + PostgreSQL + Redis + MinIO |
+| `gitlab-runner` | GitLab Runner |
+| `argocd` | Argo CD (platform capability; owns application instances once deployed) |
+| `n8n` | n8n workflow automation |
 
-### Component Dependencies
+### Component dependencies
 
-```
-FluxCD + ECK CRDs (prerequisites)
-    |
-    +-- cert-manager
-            |
-            +-- eck-operator
-            |       |
-            |       +-- elastic-stack
-            |
-            +-- opentelemetry-operator
-            |
-            +-- argocd
-            |
-            +-- n8n
-            |
-            +-- gitlab
-                    |
-                    +-- gitlab-runner
+```mermaid
+flowchart TD
+    PRE["FluxCD + ECK CRDs (prerequisites)"] --> CM[cert-manager]
+    CM --> ECK[eck-operator]
+    ECK --> ES[elastic-stack]
+    CM --> OTEL[opentelemetry-operator]
+    CM --> ARGO[argocd]
+    CM --> N8N[n8n]
+    CM --> GL[gitlab]
+    GL --> GLR[gitlab-runner]
 ```
