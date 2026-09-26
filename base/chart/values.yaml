@@ -1063,6 +1063,103 @@ opentelemetryOperator:
           memory: 128Mi
 
 # -----------------------------------------------------------------------------
+# OpenTelemetry Collector (gateway)
+# -----------------------------------------------------------------------------
+# The single entry point for telemetry. Applications and the operator's
+# auto-instrumentation send OTLP here, and the gateway forwards each signal to
+# every destination enabled below. No backend is assumed: each destination is
+# self-contained and off until enabled, and enabling none is refused at render
+# time rather than deploying a gateway that sends nowhere.
+#
+# When this is enabled, opentelemetryOperator.instrumentation sends to the
+# gateway instead of straight to APM Server.
+opentelemetryCollector:
+  enabled: false
+
+  sourceType: "helmRepo"
+
+  helmRepo:
+    repoName: open-telemetry
+    chartName: opentelemetry-collector
+    tag: "0.169.0"
+    cosignVerify: false
+
+  # Namespace for the gateway. Its Service is otel-gateway.<namespace>.svc,
+  # OTLP gRPC :4317 and OTLP HTTP :4318.
+  namespace: opentelemetry
+
+  image:
+    repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
+    tag: "0.158.0"
+
+  flux: {}
+  postRenderers: []
+
+  destinations:
+    # Elasticsearch deployed by elasticStack, written in Elastic's OTel-native
+    # layout (traces-*.otel-*, metrics-*.otel-*, logs-*.otel-*). Requires
+    # elasticStack.enabled. Everything it needs is set up in-cluster, with no
+    # manual step: a setup job uses ECK's own elastic user to create an API key
+    # that may only auto-create and append to those data streams, hands it and
+    # the cluster CA to the gateway, and gives the streams a retention (they
+    # have none by default and would otherwise fill the volume). A CronJob
+    # re-asserts all of it, so a rebuilt Elasticsearch gets it back.
+    elasticsearch:
+      enabled: false
+      signals: [traces, metrics, logs]
+      retention:
+        deleteAfter: 7d
+        rolloverMaxAge: 1d
+        rolloverMaxPrimaryShardSize: 10gb
+      # Replicas for these data streams. Empty means one fewer than the node
+      # count, capped at 1: a single-node cluster gets 0, because a replica with
+      # nowhere to go leaves the cluster yellow.
+      replicas: ""
+      # How often the CronJob re-asserts retention and re-checks the API key.
+      reassertSchedule: "17 */6 * * *"
+
+    # APM Server deployed by elasticStack, over OTLP gRPC. The Elastic-native
+    # path (traces-apm* and friends), and the one Kibana's APM app is built
+    # around. Requires elasticStack.enabled and elasticStack.apmServer.enabled.
+    apmServer:
+      enabled: false
+      signals: [traces, metrics, logs]
+
+    # Any OTLP backend, one entry each: Tempo, Loki or Prometheus (each accepts
+    # OTLP natively), a vendor's OTLP endpoint, or another collector.
+    #   name:      becomes the exporter name, otlp/<name> or otlphttp/<name>
+    #   protocol:  grpc (host:port) or http (a base URL)
+    #   signals:   any of traces, metrics, logs
+    #   insecure:  true for plaintext inside the cluster
+    #   headers:   optional; values may reference env vars declared in
+    #              values.extraEnvs, e.g. "Bearer ${env:VENDOR_TOKEN}"
+    # Examples, all off:
+    #   - name: tempo
+    #     protocol: grpc
+    #     endpoint: tempo.observability.svc:4317
+    #     signals: [traces]
+    #     insecure: true
+    #   - name: loki
+    #     protocol: http
+    #     endpoint: http://loki-gateway.observability.svc/otlp
+    #     signals: [logs]
+    #   - name: prometheus
+    #     protocol: http
+    #     endpoint: http://prometheus.observability.svc:9090/api/v1/otlp
+    #     signals: [metrics]
+    otlp: []
+
+  # Passed through to the opentelemetry-collector chart, over the defaults.
+  values:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 768Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+# -----------------------------------------------------------------------------
 # k6 Operator (Load Testing)
 # -----------------------------------------------------------------------------
 # Provides the k6 operator for running distributed load tests in Kubernetes

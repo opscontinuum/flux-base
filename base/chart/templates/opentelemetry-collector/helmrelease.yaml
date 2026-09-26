@@ -1,0 +1,59 @@
+{{- $fluxSettings := merge .Values.opentelemetryCollector.flux .Values.flux -}}
+{{- if .Values.opentelemetryCollector.enabled }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: opentelemetry-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: opentelemetry-collector
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+  annotations:
+    checksum/opsc-values: {{ include (print $.Template.BasePath "/opentelemetry-collector/values.yaml") . | sha256sum }}
+spec:
+  targetNamespace: {{ .Values.opentelemetryCollector.namespace }}
+  releaseName: opentelemetry-collector
+  chart:
+    spec:
+      {{- if eq .Values.opentelemetryCollector.sourceType "git" }}
+      chart: {{ .Values.opentelemetryCollector.git.path }}
+      sourceRef:
+        kind: GitRepository
+        name: opentelemetry-collector
+        namespace: {{ .Release.Namespace }}
+      {{- else }}
+      chart: {{ .Values.opentelemetryCollector.helmRepo.chartName }}
+      version: {{ .Values.opentelemetryCollector.helmRepo.tag }}
+      sourceRef:
+        kind: HelmRepository
+        name: {{ .Values.opentelemetryCollector.helmRepo.repoName }}
+        namespace: {{ .Release.Namespace }}
+      {{- $repoType := include "getRepoType" (dict "repoName" .Values.opentelemetryCollector.helmRepo.repoName "allRepos" $.Values.helmRepositories) -}}
+      {{- if (and .Values.opentelemetryCollector.helmRepo.cosignVerify (eq $repoType "oci")) }}
+      verify:
+        provider: cosign
+        secretRef:
+          name: {{ printf "%s-cosign-pub" .Values.opentelemetryCollector.helmRepo.repoName }}
+      {{- end }}
+      {{- end }}
+      interval: 5m
+
+  {{- toYaml $fluxSettings | nindent 2 }}
+
+  {{- if .Values.opentelemetryCollector.postRenderers }}
+  postRenderers:
+  {{ toYaml .Values.opentelemetryCollector.postRenderers | nindent 4 }}
+  {{- end }}
+
+  valuesFrom:
+    - name: {{ .Release.Name }}-opentelemetry-collector-values
+      kind: Secret
+      valuesKey: "common"
+    - name: {{ .Release.Name }}-opentelemetry-collector-values
+      kind: Secret
+      valuesKey: "defaults"
+    - name: {{ .Release.Name }}-opentelemetry-collector-values
+      kind: Secret
+      valuesKey: "overlays"
+{{- end }}
