@@ -1,0 +1,403 @@
+{{- $c := .Values.opentelemetryCollector -}}
+{{- if and .Values.elasticStack.enabled $c.enabled $c.destinations.elasticsearch.enabled }}
+{{- $esStack := .Values.elasticStack -}}
+{{- $d := $c.destinations.elasticsearch -}}
+{{- $esNs := $esStack.namespace | default "elastic-stack" -}}
+{{- $esName := $esStack.elasticsearch.name | default "elasticsearch" -}}
+{{- $esTls := not $esStack.elasticsearch.disableTls -}}
+{{- $esImage := $esStack.elasticsearch.image | default (printf "docker.elastic.co/elasticsearch/elasticsearch:%s" ($esStack.version | default "8.15.0")) -}}
+{{- /* Replicas: one fewer than the number of DATA nodes, capped at 1, unless
+       set. A nodeSet counts when it sets no node.roles (every role) or any
+       data role; master-only and other nodes cannot hold a replica. */ -}}
+{{- $dataNodes := 0 -}}
+{{- if $esStack.elasticsearch.nodeSets }}
+{{- range $esStack.elasticsearch.nodeSets }}
+{{- $roles := index (.config | default dict) "node.roles" }}
+{{- $holdsData := not $roles }}
+{{- range ($roles | default list) }}{{- if hasPrefix "data" . }}{{- $holdsData = true }}{{- end }}{{- end }}
+{{- if $holdsData }}{{- $dataNodes = add $dataNodes (int .count) }}{{- end }}
+{{- end }}
+{{- else }}
+{{- $dataNodes = int ($esStack.elasticsearch.replicas | default 1) }}
+{{- end }}
+{{- $replicas := $d.replicas -}}
+{{- if eq (toString $replicas) "" }}
+{{- $replicas = max 0 (min 1 (sub $dataNodes 1)) }}
+{{- end }}
+{{- if lt (int $d.rotateWithinDays) 1 }}
+{{- fail "opentelemetryCollector.destinations.elasticsearch.rotateWithinDays must be at least 1" }}
+{{- end }}
+{{- if le (int $d.keyLifetimeDays) (int $d.rotateWithinDays) }}
+{{- fail "opentelemetryCollector.destinations.elasticsearch.keyLifetimeDays must be greater than rotateWithinDays, or every run would replace the key" }}
+{{- end }}
+{{- $script := include "opsc.otelElasticsearchSetupScript" (dict "esTls" $esTls "esName" $esName "esNs" $esNs "gwNs" $c.namespace "replicas" $replicas "r" $d.retention "lifetimeDays" (int $d.keyLifetimeDays) "rotateWithinDays" (int $d.rotateWithinDays)) -}}
+{{- $pod := include "opsc.otelElasticsearchSetupPod" (dict "image" $esImage "esName" $esName "esTls" $esTls) -}}
+{{- /* The Job's name changes whenever anything it would do or run changes:
+       the script as rendered, or the pod (image, mounts, resources). */ -}}
+{{- $runHash := printf "%s|%s" $script $pod | sha256sum | trunc 8 -}}
+{{- /*
+  Everything the OpenTelemetry gateway needs from Elasticsearch, set up
+  in-cluster with no manual step.
+
+  1. Retention. Elastic's OTel-native data streams have NO default retention:
+     they roll over at 50 GB or 30 days and are never deleted. One ILM policy,
+     attached through the <type>-otel@custom component templates that Elastic's
+     managed logs-otel@template, metrics-otel@template and traces-otel@template
+     each compose, and set on backing indices that already exist. The script
+     refuses to report success unless each managed template really composes
+     its @custom template. It owns those three @custom templates: edits made
+     to them by hand are overwritten on the next run.
+  2. Replicas, on the same templates and on existing backing indices, so a
+     single-data-node cluster does not sit yellow.
+  3. Credentials. An API key restricted by role descriptor to auto_configure
+     and create_doc on traces-*.otel-*, logs-*.otel-* and metrics-*.otel-*,
+     and nothing else, written with the cluster CA into Secret
+     otel-gateway-elasticsearch in the gateway's namespace. The key expires
+     after keyLifetimeDays and is replaced once it has rotateWithinDays or
+     fewer left, or as soon as it stops authenticating. The key it replaces
+     stays valid until the next run, so gateway pods still rolling off it keep
+     working; after that, keys this setup made that no Secret refers to are
+     invalidated.
+  4. The gateway's pod template carries a stamp of the key id and the CA. When
+     the Secret's key or CA differs from it, the gateway is restarted, so a
+     restart that failed once is retried on the next run rather than lost.
+
+  It authenticates to Elasticsearch as ECK's elastic user, whose password is
+  read from ECK's own Secret. Passwords, keys and the ServiceAccount token
+  reach curl through files written by shell builtins, never as arguments.
+
+  A Job runs it whenever the rendered script or pod changes, because its name
+  carries their hash (Helm deletes the Job it replaces). The Job keeps no TTL:
+  one that deleted itself would only return on the next upgrade. The opsc
+  HelmRelease does not wait on Jobs, so a failing setup is visible here and
+  does not roll back the platform. A CronJob re-asserts it on a schedule, so
+  a rebuilt Elasticsearch gets its retention, replicas and key back. It runs
+  the Elasticsearch image itself, which carries bash and curl, so it adds no
+  image source.
+*/ -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $esNs }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+---
+# Writes the one Secret the gateway reads, and restarts the one Deployment
+# that reads it. Nothing else in the gateway's namespace. Kubernetes cannot
+# limit `create` by name, so the account can create other Secrets in this
+# namespace; it already holds the elastic password, which is worth more.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $c.namespace }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["otel-gateway-elasticsearch"]
+    verbs: ["get", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["otel-gateway"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $c.namespace }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: otel-elasticsearch-setup
+subjects:
+  - kind: ServiceAccount
+    name: otel-elasticsearch-setup
+    namespace: {{ $esNs }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $esNs }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+data:
+  setup.sh: |
+    {{- $script | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: otel-elasticsearch-setup-{{ $runHash }}
+  namespace: {{ $esNs }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-elasticsearch-setup
+    spec:
+      {{- $pod | nindent 6 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $esNs }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  schedule: {{ $d.reassertSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: otel-elasticsearch-setup
+        spec:
+          {{- $pod | nindent 10 }}
+{{- end }}
+
+{{- define "opsc.otelElasticsearchSetupPod" -}}
+serviceAccountName: otel-elasticsearch-setup
+restartPolicy: OnFailure
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containers:
+  - name: setup
+    image: {{ .image }}
+    command: ["/bin/bash", "/scripts/setup.sh"]
+    env:
+      - name: ELASTIC_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: {{ .esName }}-es-elastic-user
+            key: elastic
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      requests: {cpu: 10m, memory: 64Mi}
+      limits: {cpu: 200m, memory: 256Mi}
+    volumeMounts:
+      - name: scripts
+        mountPath: /scripts
+        readOnly: true
+      - name: work
+        mountPath: /work
+      {{- if .esTls }}
+      - name: es-ca
+        mountPath: /es-ca
+        readOnly: true
+      {{- end }}
+volumes:
+  - name: scripts
+    configMap:
+      name: otel-elasticsearch-setup
+  - name: work
+    emptyDir: {}
+  {{- if .esTls }}
+  - name: es-ca
+    secret:
+      secretName: {{ .esName }}-es-http-certs-public
+      items:
+        - key: ca.crt
+          path: ca.crt
+  {{- end }}
+{{- end }}
+
+{{- define "opsc.otelElasticsearchSetupScript" -}}
+#!/bin/bash
+set -euo pipefail
+ES="{{ ternary "https" "http" .esTls }}://{{ .esName }}-es-http.{{ .esNs }}.svc:9200"
+ES_HOST="{{ .esName }}-es-http.{{ .esNs }}.svc"
+GW_NS="{{ .gwNs }}"
+POLICY="opsc-otel-retention"
+REPLICAS="{{ .replicas }}"
+LIFETIME_DAYS="{{ .lifetimeDays }}"
+ROTATE_WITHIN_DAYS="{{ .rotateWithinDays }}"
+SA=/var/run/secrets/kubernetes.io/serviceaccount
+KAPI="https://kubernetes.default.svc"
+JSON='Content-Type: application/json'
+
+printf 'machine %s login elastic password %s\n' "$ES_HOST" "$ELASTIC_PASSWORD" > /work/netrc
+printf 'Authorization: Bearer %s\n' "$(cat "$SA/token")" > /work/kauth
+TLS=()
+if [ -f /es-ca/ca.crt ]; then TLS=(--cacert /es-ca/ca.crt); fi
+es()   { curl -sS --fail-with-body "${TLS[@]}" --netrc-file /work/netrc "$@"; }
+kube() { curl -sS --cacert "$SA/ca.crt" -H @/work/kauth "$@"; }
+
+# Bounded to about 10 minutes, so a cluster that never comes up fails here
+# with a reason rather than hanging.
+reachable=no
+for i in $(seq 1 30); do
+  if es "$ES/_cluster/health?wait_for_status=yellow&timeout=10s" >/dev/null 2>&1; then reachable=yes; break; fi
+  echo "waiting for Elasticsearch ($i)"; sleep 10
+done
+if [ "$reachable" != yes ]; then echo "Elasticsearch at $ES did not reach yellow in about 10 minutes"; exit 1; fi
+
+# ---- 1 and 2: retention and replicas ------------------------------------
+es -X PUT "$ES/_ilm/policy/$POLICY" -H "$JSON" -d '{
+  "policy": {"phases": {
+    "hot": {"actions": {"rollover": {
+      "max_age": "{{ .r.rolloverMaxAge }}",
+      "max_primary_shard_size": "{{ .r.rolloverMaxPrimaryShardSize }}"}}},
+    "delete": {"min_age": "{{ .r.deleteAfter }}", "actions": {"delete": {}}}}}}'
+echo
+for t in logs metrics traces; do
+  es -X PUT "$ES/_component_template/$t-otel@custom" -H "$JSON" \
+    -d "{\"template\": {\"settings\": {\"index\": {\"lifecycle\": {\"name\": \"$POLICY\"}, \"number_of_replicas\": $REPLICAS}}}}"
+  echo
+  if ! es "$ES/_index_template/$t-otel@template" | grep -q "\"$t-otel@custom\""; then
+    echo "REFUSING: $t-otel@template does not compose $t-otel@custom, so retention would not apply"
+    exit 1
+  fi
+  echo "$t-otel@template composes $t-otel@custom: retention {{ .r.deleteAfter }}, replicas $REPLICAS"
+done
+# A template reaches only indices created after it. Backing indices that
+# already exist get the same replicas and retention here.
+es -X PUT "$ES/traces-*.otel-*,metrics-*.otel-*,logs-*.otel-*/_settings?allow_no_indices=true&expand_wildcards=all" \
+  -H "$JSON" -d "{\"index\": {\"number_of_replicas\": $REPLICAS, \"lifecycle\": {\"name\": \"$POLICY\"}}}"
+echo
+
+# ---- 3: the gateway's API key -------------------------------------------
+SECRET_URL="$KAPI/api/v1/namespaces/$GW_NS/secrets/otel-gateway-elasticsearch"
+status=$(kube -o /work/secret.json -w '%{http_code}' "$SECRET_URL")
+case "$status" in 200|404) ;; *) echo "reading the Secret failed: HTTP $status"; exit 1 ;; esac
+
+key_b64=""; key_id=""; old_id=""
+reason="there is no key yet"
+if [ "$status" = 200 ]; then
+  key_b64=$(sed -n 's/.*"api_key": *"\([^"]*\)".*/\1/p' /work/secret.json | head -1)
+fi
+if [ -n "$key_b64" ]; then
+  encoded=$(printf '%s' "$key_b64" | base64 -d)
+  key_id=$(printf '%s' "$encoded" | base64 -d | cut -d: -f1)
+  printf 'Authorization: ApiKey %s\n' "$encoded" > /work/eskey
+  code=$(curl -sS -o /dev/null -w '%{http_code}' "${TLS[@]}" -H @/work/eskey "$ES/_security/_authenticate")
+  if [ "$code" != 200 ]; then
+    reason="the key no longer authenticates (HTTP $code)"
+  else
+    es "$ES/_security/api_key?id=$key_id&filter_path=api_keys.expiration" > /work/keyinfo.json
+    expires_ms=$(sed -n 's/.*"expiration":\([0-9]*\).*/\1/p' /work/keyinfo.json)
+    now_ms=$(( $(date +%s) * 1000 ))
+    if [ -z "$expires_ms" ]; then
+      reason="the key has no expiration"
+    elif [ $(( expires_ms - now_ms )) -le $(( ROTATE_WITHIN_DAYS * 86400000 )) ]; then
+      reason="the key expires within $ROTATE_WITHIN_DAYS days"
+    else
+      reason=""
+    fi
+  fi
+fi
+
+if [ -z "$reason" ]; then
+  key_b64_new="$key_b64"
+  echo "keeping key $key_id: it authenticates and has more than $ROTATE_WITHIN_DAYS days left"
+else
+  echo "creating a new API key: $reason"
+  es -X POST "$ES/_security/api_key" -H "$JSON" -d "{
+    \"name\": \"otel-gateway\",
+    \"expiration\": \"${LIFETIME_DAYS}d\",
+    \"role_descriptors\": {\"otel_writer\": {
+      \"cluster\": [\"monitor\"],
+      \"indices\": [{\"names\": [\"traces-*.otel-*\", \"logs-*.otel-*\", \"metrics-*.otel-*\"],
+                   \"privileges\": [\"auto_configure\", \"create_doc\"]}]}},
+    \"metadata\": {\"managed_by\": \"opsc\"}}" > /work/key.json
+  encoded=$(sed -n 's/.*"encoded":"\([^"]*\)".*/\1/p' /work/key.json)
+  if [ -z "$encoded" ]; then echo "Elasticsearch returned no API key"; exit 1; fi
+  old_id="$key_id"
+  key_id=$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' /work/key.json)
+  key_b64_new=$(printf '%s' "$encoded" | base64 -w0)
+  echo "created key $key_id, expiring in $LIFETIME_DAYS days"
+fi
+
+ca_b64=""; ca_sum="none"
+if [ -f /es-ca/ca.crt ]; then
+  ca_b64=$(base64 -w0 < /es-ca/ca.crt)
+  ca_sum=$(sha256sum < /es-ca/ca.crt | cut -c1-16)
+fi
+
+printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"otel-gateway-elasticsearch","namespace":"%s","labels":{"app.kubernetes.io/managed-by":"otel-elasticsearch-setup"}},"type":"Opaque","data":{"api_key":"%s","ca.crt":"%s"}}' \
+  "$GW_NS" "$key_b64_new" "$ca_b64" > /work/secret-new.json
+if [ "$status" = 200 ]; then
+  code=$(kube -o /work/out.json -w '%{http_code}' -X PUT -H "$JSON" --data-binary @/work/secret-new.json "$SECRET_URL")
+else
+  code=$(kube -o /work/out.json -w '%{http_code}' -X POST -H "$JSON" --data-binary @/work/secret-new.json "$KAPI/api/v1/namespaces/$GW_NS/secrets")
+fi
+case "$code" in 200|201) echo "wrote $GW_NS/otel-gateway-elasticsearch" ;; *) echo "writing the Secret failed: HTTP $code"; exit 1 ;; esac
+
+# ---- 4: the gateway runs the key and CA in the Secret -------------------
+stamp="$key_id.$ca_sum"
+DEPLOY_URL="$KAPI/apis/apps/v1/namespaces/$GW_NS/deployments/otel-gateway"
+code=$(kube -o /work/deploy.json -w '%{http_code}' "$DEPLOY_URL")
+case "$code" in
+  404)
+    echo "$GW_NS/otel-gateway does not exist yet; it reads the Secret when it starts" ;;
+  200)
+    current=$(sed -n 's/.*"opsc\/elasticsearch-credential": *"\([^"]*\)".*/\1/p' /work/deploy.json | head -1)
+    if [ "$current" = "$stamp" ]; then
+      echo "$GW_NS/otel-gateway already runs key $key_id with this CA"
+    else
+      patch="{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"opsc/elasticsearch-credential\":\"$stamp\"}}}}}"
+      code=$(kube -o /dev/null -w '%{http_code}' -X PATCH -H 'Content-Type: application/strategic-merge-patch+json' --data "$patch" "$DEPLOY_URL")
+      case "$code" in 200) echo "restarted $GW_NS/otel-gateway onto key $key_id" ;; *) echo "restarting $GW_NS/otel-gateway failed: HTTP $code"; exit 1 ;; esac
+    fi ;;
+  *)
+    echo "reading $GW_NS/otel-gateway failed: HTTP $code"; exit 1 ;;
+esac
+
+# ---- 5: keys no Secret refers to ----------------------------------------
+# Every live otel-gateway key this setup made, except the current one, the
+# one it replaced in this run (pods may still be rolling off it; the next run
+# sweeps it), and any made in the last hour (a concurrent run's).
+keep="\"$key_id\""
+if [ -n "$old_id" ]; then keep="$keep,\"$old_id\""; fi
+es -X POST "$ES/_security/_query/api_key?filter_path=api_keys.id" -H "$JSON" -d "{
+  \"size\": 1000,
+  \"query\": {\"bool\": {
+    \"filter\": [{\"term\": {\"name\": \"otel-gateway\"}},
+               {\"term\": {\"invalidated\": false}},
+               {\"term\": {\"metadata.managed_by\": \"opsc\"}},
+               {\"range\": {\"creation\": {\"lt\": \"now-1h\"}}}],
+    \"must_not\": [{\"ids\": {\"values\": [$keep]}}]}}}" > /work/stale.json
+stale=$(grep -o '"id":"[^"]*"' /work/stale.json | cut -d'"' -f4 || true)
+if [ -n "$stale" ]; then
+  ids=$(printf '%s\n' "$stale" | sed 's/.*/"&"/' | paste -sd, -)
+  es -X DELETE "$ES/_security/api_key" -H "$JSON" -d "{\"ids\": [$ids]}" > /dev/null
+  echo "invalidated $(printf '%s\n' "$stale" | wc -l) API key(s) that no Secret refers to"
+fi
+{{- end }}

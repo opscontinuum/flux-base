@@ -1,0 +1,10 @@
+{{- if .Values.opentelemetryCollector.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.opentelemetryCollector.namespace }}
+  labels:
+    app.kubernetes.io/name: opentelemetry-collector
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+{{- end }}

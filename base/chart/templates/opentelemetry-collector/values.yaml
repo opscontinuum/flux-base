@@ -1,0 +1,185 @@
+{{- if .Values.opentelemetryCollector.enabled }}
+{{- include "values-secret" (dict "root" $ "package" .Values.opentelemetryCollector "name" "opentelemetry-collector" "defaults" (include "opsc.defaults.opentelemetryCollector" .)) }}
+{{- end }}
+
+{{- /*
+  Which exporters each signal goes to, as JSON: {"traces": [...], "metrics":
+  [...], "logs": [...], "elasticsearch": [signals]}. The OTLP destinations
+  are listed per signal; Elasticsearch is listed by signal separately because
+  its metrics take their own pipeline. Shared by the gateway's configuration
+  below and by the instrumentation, which must not route a signal to a
+  gateway that has nowhere to send it.
+*/ -}}
+{{- define "opsc.otelGatewayRoutes" -}}
+{{- $d := .Values.opentelemetryCollector.destinations -}}
+{{- $pipes := dict "traces" (list) "metrics" (list) "logs" (list) -}}
+{{- range $d.otlp }}
+{{- $exp := printf "%s/%s" (ternary "otlp_http" "otlp_grpc" (eq .protocol "http")) .name }}
+{{- range .signals }}{{- $_ := set $pipes . (append (get $pipes .) $exp) }}{{- end }}
+{{- end }}
+{{- $_ := set $pipes "elasticsearch" (ternary $d.elasticsearch.signals (list) $d.elasticsearch.enabled) -}}
+{{- toJson $pipes -}}
+{{- end }}
+
+{{- /*
+  The gateway's configuration, built from opentelemetryCollector.destinations.
+
+  Each signal gets a pipeline only if at least one enabled destination takes
+  that signal. A pipeline with no destination is set to null, which removes
+  the chart's default pipeline of the same name rather than leaving it
+  exporting to `debug`.
+
+  Elasticsearch takes metrics through its own pipeline, metrics/elasticsearch,
+  because Elastic's OTel-native mapping stores only DELTA histograms and the
+  exporter drops cumulative ones. cumulative_to_delta converts histograms, and
+  only histograms, on that pipeline, so every other destination keeps the
+  cumulative series it expects. cumulative_to_delta is stateful per series,
+  which is why the gateway runs one replica.
+*/ -}}
+{{- define "opsc.defaults.opentelemetryCollector" -}}
+{{- $c := .Values.opentelemetryCollector -}}
+{{- $esStack := .Values.elasticStack -}}
+{{- $routes := include "opsc.otelGatewayRoutes" . | fromJson -}}
+{{- $esSignals := $routes.elasticsearch -}}
+{{- $esOn := gt (len $esSignals) 0 -}}
+{{- if and $esOn (not $esStack.enabled) }}
+{{- fail "opentelemetryCollector.destinations.elasticsearch needs elasticStack.enabled: it writes to the Elasticsearch that elasticStack deploys" }}
+{{- end }}
+{{- $any := or $esOn (gt (len $routes.traces) 0) (gt (len $routes.metrics) 0) (gt (len $routes.logs) 0) -}}
+{{- if not $any }}
+{{- fail "opentelemetryCollector is enabled with no destination: enable destinations.elasticsearch or add an entry to destinations.otlp" }}
+{{- end }}
+{{- $esNs := $esStack.namespace | default "elastic-stack" -}}
+{{- $esName := $esStack.elasticsearch.name | default "elasticsearch" -}}
+{{- $esTls := not $esStack.elasticsearch.disableTls -}}
+# OpenTelemetry Collector gateway, rendered by opsc from opentelemetryCollector.destinations.
+fullnameOverride: otel-gateway
+mode: deployment
+replicaCount: 1
+image:
+  repository: {{ $c.image.repository }}
+  tag: {{ $c.image.tag | quote }}
+command:
+  name: otelcol-contrib
+{{- if (include "imagePullSecret" .) }}
+imagePullSecrets:
+  - name: private-registry
+{{- end }}
+# The preset defines the k8s_attributes processor and its RBAC. The pipelines
+# below list it explicitly, AFTER memory_limiter: the preset would otherwise
+# put it first, and memory_limiter must run before anything else does work.
+presets:
+  kubernetesAttributes:
+    enabled: true
+# Cluster-scoped, so named for the namespace: a bare otel-gateway collides with
+# any other collector of that name on the cluster, including a second opsc.
+clusterRole:
+  name: {{ printf "otel-gateway-%s" $c.namespace }}
+  clusterRoleBinding:
+    name: {{ printf "otel-gateway-%s" $c.namespace }}
+# Only OTLP is received. The chart's default Jaeger, Zipkin and Prometheus
+# receivers are removed, with their Service ports, so nothing listens that no
+# pipeline reads.
+ports:
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+config:
+  receivers:
+    jaeger: null
+    zipkin: null
+    prometheus: null
+  processors:
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+    batch: {}
+    {{- if has "metrics" $esSignals }}
+    cumulative_to_delta/histograms:
+      include:
+        metric_types: [histogram]
+    {{- end }}
+  exporters:
+    {{- if $esOn }}
+    elasticsearch:
+      endpoints:
+        - {{ printf "%s://%s-es-http.%s.svc:9200" (ternary "https" "http" $esTls) $esName $esNs }}
+      api_key: ${env:ELASTICSEARCH_API_KEY}
+      {{- if $esTls }}
+      tls:
+        ca_file: /etc/otel/elasticsearch/ca.crt
+      {{- end }}
+    {{- end }}
+    {{- range $c.destinations.otlp }}
+    {{ printf "%s/%s" (ternary "otlp_http" "otlp_grpc" (eq .protocol "http")) .name }}:
+      endpoint: {{ .endpoint }}
+      {{- if .insecure }}
+      tls:
+        insecure: true
+      {{- end }}
+      {{- with .headers }}
+      headers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+  service:
+    pipelines:
+      {{- range $signal := list "traces" "logs" }}
+      {{- $exps := get $routes $signal }}
+      {{- if has $signal $esSignals }}{{- $exps = append $exps "elasticsearch" }}{{- end }}
+      {{- if $exps }}
+      {{ $signal }}:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: {{ toJson $exps }}
+      {{- else }}
+      {{ $signal }}: null
+      {{- end }}
+      {{- end }}
+      {{- if $routes.metrics }}
+      metrics:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: {{ toJson $routes.metrics }}
+      {{- else }}
+      metrics: null
+      {{- end }}
+      {{- if has "metrics" $esSignals }}
+      metrics/elasticsearch:
+        receivers: [otlp]
+        processors: [memory_limiter, k8s_attributes, cumulative_to_delta/histograms, batch]
+        exporters: [elasticsearch]
+      {{- end }}
+{{- $envs := list }}
+{{- if $esOn }}
+{{- /* The API key and the cluster CA, written by the elastic-stack setup job
+       (templates/elastic-stack/otel-ingest.yaml). Until it has run once the pod
+       waits in CreateContainerConfigError, visibly, rather than starting unable
+       to authenticate. */ -}}
+{{- $envs = append $envs (dict "name" "ELASTICSEARCH_API_KEY" "valueFrom" (dict "secretKeyRef" (dict "name" "otel-gateway-elasticsearch" "key" "api_key"))) }}
+{{- end }}
+{{- $envs = concat $envs ($c.extraEnvs | default list) }}
+{{- with $envs }}
+extraEnvs:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- if and $esOn $esTls }}
+extraVolumes:
+  - name: elasticsearch
+    secret:
+      secretName: otel-gateway-elasticsearch
+      items:
+        - key: ca.crt
+          path: ca.crt
+extraVolumeMounts:
+  - name: elasticsearch
+    mountPath: /etc/otel/elasticsearch
+    readOnly: true
+{{- end }}
+{{- end -}}

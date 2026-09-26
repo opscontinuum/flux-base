@@ -15,6 +15,8 @@ A Kubernetes platform deployment using GitOps (FluxCD). It includes:
 - ECK Operator 3.x, Elastic Cloud on Kubernetes (supports Elastic 9.x)
 - Elastic Stack 9.x: Elasticsearch, Kibana, Fleet Server, Elastic Agent, APM Server
 - OpenTelemetry Operator, for auto-instrumentation and distributed tracing
+- OpenTelemetry Collector gateway (optional), one OTLP endpoint that forwards
+  traces, metrics and logs to Elasticsearch, APM Server or any OTLP backend
 - GitLab CE
 - GitLab Runner
 - Argo CD
@@ -337,6 +339,9 @@ argocd:
 
 n8n:
   enabled: true
+
+opentelemetryCollector:     # off by default; see "Where telemetry goes"
+  enabled: false
 ```
 
 Commit and push your configuration changes:
@@ -488,6 +493,123 @@ kubectl -n elastic-stack get secret elasticsearch-es-elastic-user \
 
 ---
 
+## Where telemetry goes
+
+The OpenTelemetry Operator auto-instruments workloads. On its own, it sends
+their OTLP (OpenTelemetry Protocol) data straight to APM Server. Turn on
+`opentelemetryCollector` and it sends to a gateway instead, which forwards
+each signal to every destination you enable:
+
+```mermaid
+flowchart LR
+    APP[instrumented workloads] -->|OTLP gRPC :4317 / HTTP :4318| GW[otel-gateway]
+    GW -->|HTTPS :9200, API key| ES[(Elasticsearch<br/>traces-*.otel-*<br/>metrics-*.otel-*<br/>logs-*.otel-*)]
+    GW -->|OTLP gRPC or HTTP| OTHER[any OTLP backend:<br/>Tempo, Loki, Prometheus,<br/>APM Server, a vendor]
+```
+
+No destination is assumed. Each one is off until you enable it, and enabling
+the gateway with none is refused when the chart renders, rather than deploying
+a gateway that sends nowhere. The instrumentation sends traces, metrics and
+logs, so with the operator on, the render also refuses a gateway that has no
+destination for one of them: those signals would be rejected and lost.
+
+```yaml
+opentelemetryCollector:
+  enabled: true
+  extraEnvs:                      # appended to the gateway's own environment
+    - name: VENDOR_TOKEN
+      valueFrom: {secretKeyRef: {name: vendor, key: token}}
+  destinations:
+    elasticsearch:
+      enabled: true               # needs elasticStack.enabled
+      retention:
+        deleteAfter: 7d
+    otlp:
+      - name: tempo
+        protocol: grpc
+        endpoint: tempo.observability.svc:4317
+        signals: [traces]
+        insecure: true
+      - name: vendor
+        protocol: http
+        endpoint: https://otlp.example.com
+        signals: [metrics]
+        headers: {Authorization: "Bearer ${env:VENDOR_TOKEN}"}
+```
+
+Put extra environment in `opentelemetryCollector.extraEnvs`, not in
+`values.extraEnvs`: the chart replaces lists, so the second would drop the
+Elasticsearch key the gateway needs.
+
+Elastic APM Server is an OTLP destination like any other, but ECK requires its
+secret token on every request, and APM Server rejects a whole batch when one
+service in it is not allowed in anonymously. Add it as an `otlp` entry with the
+token from ECK's `<name>-apm-token` Secret in `extraEnvs`, sent as an
+`Authorization: Bearer` header.
+
+### What the Elasticsearch destination sets up for you
+
+Nothing here is manual. A setup Job in the Elasticsearch namespace, using ECK's
+own `elastic` user from inside the cluster, does five things:
+
+1. **Retention.** Elastic's OTel-native data streams have no retention by
+   default, so they grow until the volume is full. The Job creates one ILM
+   (index lifecycle management) policy, attaches it through the
+   `<type>-otel@custom` component templates, and sets it on backing indices
+   that already exist. It refuses to report success unless each of Elastic's
+   managed `logs-otel@template`, `metrics-otel@template` and
+   `traces-otel@template` really includes its `@custom` template, because one
+   that nothing includes is retention that silently never applies. The Job
+   owns those three `@custom` templates: edits made to them by hand are
+   overwritten on its next run.
+2. **Replicas.** The Job sets replicas on those templates and on existing
+   indices. The default is one fewer than the number of data nodes, capped at
+   1, so a cluster with one data node gets 0 and stays green instead of yellow.
+3. **A write-only credential.** The Job creates an API key whose role allows
+   `auto_configure` and `create_doc` on `traces-*.otel-*`, `logs-*.otel-*` and
+   `metrics-*.otel-*`, and nothing else. The key cannot read or delete
+   documents, write any other index, or mint keys. Its only cluster privilege
+   is `monitor`. The key and the cluster CA go into Secret
+   `otel-gateway-elasticsearch` in the gateway's namespace. Until the Job has
+   run once, the gateway pod waits in `CreateContainerConfigError` rather than
+   starting unable to authenticate.
+4. **Expiry and rotation.** The key expires after `keyLifetimeDays` (30). The
+   Job replaces it once it has `rotateWithinDays` (7) or fewer left, or as soon
+   as it stops authenticating, so the gateway never holds an expired key. The
+   replaced key stays valid until the next run, while gateway pods roll off it.
+   After that, any key the Job made that no Secret refers to is invalidated.
+5. **The gateway runs the current key.** The gateway's pod template carries a
+   stamp of the key and the CA. Whenever the Secret's key or CA differs from
+   it, the Job restarts the gateway, so a restart that failed once is retried
+   on the next run.
+
+The Job's name carries a hash of its script and pod, so it reruns whenever
+either changes. A CronJob (`reassertSchedule`, every 6 hours by default) runs the
+same steps, so a rebuilt Elasticsearch gets its retention, replicas and key
+back. The platform release does not wait on this Job: a failure shows on the
+Job and its log, and does not roll back or uninstall the platform.
+
+Metrics reach Elasticsearch through their own pipeline, which converts
+histograms from cumulative to delta. Elastic's OTel-native mapping stores only
+delta histograms and drops cumulative ones. Every other destination still gets
+the cumulative series it expects. Because that conversion keeps state for each
+series, the gateway runs as one replica.
+
+### Checking it
+
+```bash
+kubectl -n elastic-stack get jobs -l app.kubernetes.io/name=otel-elasticsearch-setup
+kubectl -n elastic-stack logs job/<the newest of those jobs>
+kubectl -n opentelemetry get pods
+kubectl -n opentelemetry logs deploy/otel-gateway | grep -i -E "error|dropping"
+```
+
+The Job log should show each managed template including its `@custom`
+template, then either `created key ...` or `keeping key ...`, and either
+`restarted ... onto key ...` or `already runs key ...`.
+
+---
+
 ## Setting real values locally
 
 **This repository is public. Your real domain, your real ACME contact email,
@@ -588,6 +710,7 @@ values listed under "Before you deploy":
 | `elasticsearch-es-elastic-user` | elastic-stack | Elasticsearch admin password |
 | `argocd-argocd-initial-admin-secret` | argocd | Argo CD admin password |
 | `gitlab-gitlab-initial-root-password` | gitlab | GitLab root password |
+| `otel-gateway-elasticsearch` | opentelemetry | The gateway's write-only Elasticsearch API key and the cluster CA, written by the setup Job |
 
 ---
 
@@ -623,6 +746,7 @@ Minimum recommended resources with all components enabled:
 | fleet-server | 100m | 256Mi | 512Mi | |
 | elastic-agent | 200m | 512Mi | 1Gi | |
 | opentelemetry-operator | 100m | 128Mi | 256Mi | |
+| otel-gateway | 100m | 256Mi | 768Mi | Optional; one replica |
 | gitlab | 1000m | 4Gi | 6Gi | Includes all subcomponents |
 | gitlab-runner | 100m | 128Mi | 256Mi | |
 | argocd | 250m | 256Mi | 512Mi | |
@@ -719,6 +843,7 @@ kubectl delete namespace cert-manager eck-operator gitlab gitlab-runner \
 | `eck-operator` | ECK Operator 3.x |
 | `elastic-stack` | Elasticsearch, Kibana, Fleet, Agent, APM |
 | `opentelemetry-operator-system` | OpenTelemetry Operator |
+| `opentelemetry` | OpenTelemetry Collector gateway (optional) |
 | `gitlab` | GitLab CE + PostgreSQL + Redis + MinIO |
 | `gitlab-runner` | GitLab Runner |
 | `argocd` | Argo CD (platform capability; owns application instances once deployed) |
@@ -732,6 +857,7 @@ flowchart TD
     CM --> ECK[eck-operator]
     ECK --> ES[elastic-stack]
     CM --> OTEL[opentelemetry-operator]
+    ES --> GW["opentelemetry-collector (optional)"]
     CM --> ARGO[argocd]
     CM --> N8N[n8n]
     CM --> GL[gitlab]

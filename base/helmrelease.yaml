@@ -13,10 +13,16 @@ spec:
         kind: GitRepository
         name: opsc
         namespace: flux-system
+  # Wait for resources to be ready, but not for Jobs. The only non-hook Job
+  # this chart renders is the Elasticsearch setup for the OpenTelemetry
+  # gateway; a failure there must show on that Job, not roll back or
+  # uninstall the whole platform (and delete the failed Job's log with it).
   install:
+    disableWaitForJobs: true
     remediation:
       retries: 3
   upgrade:
+    disableWaitForJobs: true
     cleanupOnFail: true
     remediation:
       retries: 3
