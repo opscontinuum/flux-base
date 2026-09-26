@@ -16,6 +16,15 @@ after the operator CRDs are available.
 {{- $viaGateway := .Values.opentelemetryCollector.enabled }}
 {{- $endpoint := $apmServerUrl | default "http://apm-server.elastic-stack.svc:8200" }}
 {{- if $viaGateway }}
+{{- /* The instrumentation exports all three signals. A signal the gateway has
+       no pipeline for is rejected with Unimplemented and lost, where it used
+       to reach APM Server, so refuse that rather than route it there. */ -}}
+{{- $routes := include "opsc.otelGatewayRoutes" . | fromJson }}
+{{- range $signal := list "traces" "metrics" "logs" }}
+{{- if not (or (get $routes $signal) (has $signal $routes.elasticsearch)) }}
+{{- fail (printf "opentelemetryOperator.instrumentation sends %s to the gateway, and no opentelemetryCollector destination takes %s; add one, or those %s are rejected and lost" $signal $signal $signal) }}
+{{- end }}
+{{- end }}
 {{- $endpoint = printf "http://otel-gateway.%s.svc:4317" .Values.opentelemetryCollector.namespace }}
 {{- end }}
 ---
