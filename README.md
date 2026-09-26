@@ -504,60 +504,90 @@ each signal to every destination you enable:
 flowchart LR
     APP[instrumented workloads] -->|OTLP gRPC :4317 / HTTP :4318| GW[otel-gateway]
     GW -->|HTTPS :9200, API key| ES[(Elasticsearch<br/>traces-*.otel-*<br/>metrics-*.otel-*<br/>logs-*.otel-*)]
-    GW -->|OTLP gRPC :8200| APM[APM Server]
-    GW -->|OTLP| OTHER[any OTLP backend:<br/>Tempo, Loki, Prometheus, a vendor]
+    GW -->|OTLP gRPC or HTTP| OTHER[any OTLP backend:<br/>Tempo, Loki, Prometheus,<br/>APM Server, a vendor]
 ```
 
 No destination is assumed. Each one is off until you enable it, and enabling
 the gateway with none is refused when the chart renders, rather than deploying
-a gateway that sends nowhere.
+a gateway that sends nowhere. The instrumentation sends traces, metrics and
+logs, so with the operator on, the render also refuses a gateway that has no
+destination for one of them: those signals would be rejected and lost.
 
 ```yaml
 opentelemetryCollector:
   enabled: true
+  extraEnvs:                      # appended to the gateway's own environment
+    - name: VENDOR_TOKEN
+      valueFrom: {secretKeyRef: {name: vendor, key: token}}
   destinations:
     elasticsearch:
       enabled: true               # needs elasticStack.enabled
       retention:
         deleteAfter: 7d
-    apmServer:
-      enabled: false              # needs elasticStack.apmServer.enabled and disableTls: true
     otlp:
       - name: tempo
         protocol: grpc
         endpoint: tempo.observability.svc:4317
         signals: [traces]
         insecure: true
+      - name: vendor
+        protocol: http
+        endpoint: https://otlp.example.com
+        signals: [metrics]
+        headers: {Authorization: "Bearer ${env:VENDOR_TOKEN}"}
 ```
+
+Put extra environment in `opentelemetryCollector.extraEnvs`, not in
+`values.extraEnvs`: the chart replaces lists, so the second would drop the
+Elasticsearch key the gateway needs.
+
+Elastic APM Server is an OTLP destination like any other, but ECK requires its
+secret token on every request, and APM Server rejects a whole batch when one
+service in it is not allowed in anonymously. Add it as an `otlp` entry with the
+token from ECK's `<name>-apm-token` Secret in `extraEnvs`, sent as an
+`Authorization: Bearer` header.
 
 ### What the Elasticsearch destination sets up for you
 
 Nothing here is manual. A setup Job in the Elasticsearch namespace, using ECK's
-own `elastic` user from inside the cluster, does four things:
+own `elastic` user from inside the cluster, does five things:
 
 1. **Retention.** Elastic's OTel-native data streams have no retention by
    default, so they grow until the volume is full. The Job creates one ILM
-   (index lifecycle management) policy and attaches it through the
-   `<type>-otel@custom` component templates. It refuses to report success
-   unless each of Elastic's managed `logs-otel@template`, `metrics-otel@template`
-   and `traces-otel@template` really includes its `@custom` template, because
-   one that nothing includes is retention that silently never applies.
-2. **Replicas.** The Job sets replicas on those templates and on indices that
-   already exist. The default is one fewer than the node count, capped at 1, so
-   a single-node cluster gets 0 and stays green instead of yellow.
+   (index lifecycle management) policy, attaches it through the
+   `<type>-otel@custom` component templates, and sets it on backing indices
+   that already exist. It refuses to report success unless each of Elastic's
+   managed `logs-otel@template`, `metrics-otel@template` and
+   `traces-otel@template` really includes its `@custom` template, because one
+   that nothing includes is retention that silently never applies. The Job
+   owns those three `@custom` templates: edits made to them by hand are
+   overwritten on its next run.
+2. **Replicas.** The Job sets replicas on those templates and on existing
+   indices. The default is one fewer than the number of data nodes, capped at
+   1, so a cluster with one data node gets 0 and stays green instead of yellow.
 3. **A write-only credential.** The Job creates an API key whose role allows
-   `auto_configure` and `create_doc` on `traces-*`, `logs-*` and `metrics-*`,
-   and nothing else: the key cannot read, delete, or mint keys. The key and the
-   cluster CA go into Secret `otel-gateway-elasticsearch` in the gateway's
-   namespace. Until the Job has run once, the gateway pod waits in
-   `CreateContainerConfigError` rather than starting unable to authenticate.
-4. **Rotation.** On later runs the Job keeps a key that still authenticates. A
-   key that no longer does is replaced, and the gateway is restarted to pick up
-   the new one.
+   `auto_configure` and `create_doc` on `traces-*.otel-*`, `logs-*.otel-*` and
+   `metrics-*.otel-*`, and nothing else. The key cannot read or delete
+   documents, write any other index, or mint keys. Its only cluster privilege
+   is `monitor`. The key and the cluster CA go into Secret
+   `otel-gateway-elasticsearch` in the gateway's namespace. Until the Job has
+   run once, the gateway pod waits in `CreateContainerConfigError` rather than
+   starting unable to authenticate.
+4. **Expiry and rotation.** The key expires after `keyLifetimeDays` (30). The
+   Job replaces it once it has `rotateWithinDays` (7) or fewer left, or as soon
+   as it stops authenticating, so the gateway never holds an expired key. The
+   replaced key stays valid until the next run, while gateway pods roll off it.
+   After that, any key the Job made that no Secret refers to is invalidated.
+5. **The gateway runs the current key.** The gateway's pod template carries a
+   stamp of the key and the CA. Whenever the Secret's key or CA differs from
+   it, the Job restarts the gateway, so a restart that failed once is retried
+   on the next run.
 
-The Job's name carries a hash of its script and image, so it reruns whenever
+The Job's name carries a hash of its script and pod, so it reruns whenever
 either changes. A CronJob (`reassertSchedule`, every 6 hours by default) runs the
-same steps, so a rebuilt Elasticsearch gets its retention, replicas and key back.
+same steps, so a rebuilt Elasticsearch gets its retention, replicas and key
+back. The platform release does not wait on this Job: a failure shows on the
+Job and its log, and does not roll back or uninstall the platform.
 
 Metrics reach Elasticsearch through their own pipeline, which converts
 histograms from cumulative to delta. Elastic's OTel-native mapping stores only
@@ -568,15 +598,15 @@ series, the gateway runs as one replica.
 ### Checking it
 
 ```bash
-kubectl -n elastic-stack logs job/$(kubectl -n elastic-stack get jobs \
-  -l app.kubernetes.io/name=otel-elasticsearch-setup -o name | head -1 | cut -d/ -f2)
+kubectl -n elastic-stack get jobs -l app.kubernetes.io/name=otel-elasticsearch-setup
+kubectl -n elastic-stack logs job/<the newest of those jobs>
 kubectl -n opentelemetry get pods
 kubectl -n opentelemetry logs deploy/otel-gateway | grep -i -E "error|dropping"
 ```
 
 The Job log should show each managed template including its `@custom`
-template, and then either `created a new API key` or `still authenticates;
-keeping it`.
+template, then either `created key ...` or `keeping key ...`, and either
+`restarted ... onto key ...` or `already runs key ...`.
 
 ---
 
