@@ -1,0 +1,313 @@
+{{- $c := .Values.opentelemetryCollector -}}
+{{- if and .Values.elasticStack.enabled $c.enabled $c.destinations.elasticsearch.enabled }}
+{{- $esStack := .Values.elasticStack -}}
+{{- $esNs := $esStack.namespace | default "elastic-stack" -}}
+{{- $esName := $esStack.elasticsearch.name | default "elasticsearch" -}}
+{{- $esTls := not $esStack.elasticsearch.disableTls -}}
+{{- $r := $c.destinations.elasticsearch.retention -}}
+{{- /* Replicas: one fewer than the node count, capped at 1, unless set. */ -}}
+{{- $nodes := int ($esStack.elasticsearch.replicas | default 1) -}}
+{{- if $esStack.elasticsearch.nodeSets }}
+{{- $nodes = 0 }}
+{{- range $esStack.elasticsearch.nodeSets }}{{- $nodes = add $nodes (int .count) }}{{- end }}
+{{- end }}
+{{- $replicas := $c.destinations.elasticsearch.replicas -}}
+{{- if eq (toString $replicas) "" }}
+{{- $replicas = max 0 (min 1 (sub $nodes 1)) }}
+{{- end }}
+{{- $script := include "opsc.otelElasticsearchSetupScript" (dict "esTls" $esTls "esName" $esName "esNs" $esNs "gwNs" $c.namespace "replicas" $replicas "r" $r) -}}
+{{- /* The Job's name changes whenever anything it would do changes: the script as rendered, the image, or the cluster it reads. */ -}}
+{{- $runHash := printf "%s|%s|%s" $script $esStack.version $esName | sha256sum | trunc 8 -}}
+{{- /*
+  Everything the OpenTelemetry gateway needs from Elasticsearch, set up
+  in-cluster with no manual step.
+
+  1. Retention. Elastic's OTel-native data streams have NO default retention:
+     they roll over at 50 GB or 30 days and are never deleted. One ILM policy,
+     attached through the <type>-otel@custom component templates that Elastic's
+     managed logs-otel@template, metrics-otel@template and traces-otel@template
+     each compose. The script refuses to report success unless each managed
+     template really composes its @custom template.
+  2. Replicas, on the same templates and on backing indices that already
+     exist, so a single-node cluster does not sit yellow.
+  3. Credentials. An API key restricted by role descriptor to auto_configure
+     and create_doc on traces-*, logs-* and metrics-*, and nothing else,
+     written with the cluster CA into Secret otel-gateway-elasticsearch in the
+     gateway's namespace. An existing key is kept while it still
+     authenticates; a key that no longer does is replaced and the gateway is
+     restarted to pick it up.
+
+  It authenticates to Elasticsearch as ECK's elastic user, whose password is
+  read from ECK's own Secret. Passwords, keys and the ServiceAccount token
+  reach curl through files written by shell builtins, never as arguments.
+
+  A Job runs it whenever the rendered script, the image or the cluster
+  changes, because its name carries their hash (Helm deletes the Job it
+  replaces). The Job keeps no TTL: one that deleted itself would only return
+  on the next upgrade. A CronJob re-asserts it on a schedule, so a rebuilt
+  Elasticsearch gets its retention, replicas and key back. It runs the
+  Elasticsearch image itself, which carries bash and curl, so it adds no
+  image source.
+*/ -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $esNs }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+---
+# Writes the one Secret the gateway reads, and restarts the one Deployment
+# that reads it. Nothing else in the gateway's namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $c.namespace }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["otel-gateway-elasticsearch"]
+    verbs: ["get", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["otel-gateway"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $c.namespace }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: otel-elasticsearch-setup
+subjects:
+  - kind: ServiceAccount
+    name: otel-elasticsearch-setup
+    namespace: {{ $esNs }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $esNs }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+data:
+  setup.sh: |
+    {{- $script | nindent 4 }}
+{{- $pod := dict "esVersion" $esStack.version "esName" $esName "esTls" $esTls }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: otel-elasticsearch-setup-{{ $runHash }}
+  namespace: {{ $esNs }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-elasticsearch-setup
+    spec:
+      {{- include "opsc.otelElasticsearchSetupPod" $pod | nindent 6 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: otel-elasticsearch-setup
+  namespace: {{ $esNs }}
+  labels:
+    app.kubernetes.io/name: otel-elasticsearch-setup
+    app.kubernetes.io/component: "observability"
+    {{- include "commonLabels" . | nindent 4 }}
+spec:
+  schedule: {{ $c.destinations.elasticsearch.reassertSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: otel-elasticsearch-setup
+        spec:
+          {{- include "opsc.otelElasticsearchSetupPod" $pod | nindent 10 }}
+{{- end }}
+
+{{- define "opsc.otelElasticsearchSetupPod" }}
+serviceAccountName: otel-elasticsearch-setup
+restartPolicy: OnFailure
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+containers:
+  - name: setup
+    image: {{ printf "docker.elastic.co/elasticsearch/elasticsearch:%s" .esVersion }}
+    command: ["/bin/bash", "/scripts/setup.sh"]
+    env:
+      - name: ELASTIC_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: {{ .esName }}-es-elastic-user
+            key: elastic
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      requests: {cpu: 10m, memory: 64Mi}
+      limits: {cpu: 200m, memory: 256Mi}
+    volumeMounts:
+      - name: scripts
+        mountPath: /scripts
+        readOnly: true
+      - name: work
+        mountPath: /work
+      {{- if .esTls }}
+      - name: es-ca
+        mountPath: /es-ca
+        readOnly: true
+      {{- end }}
+volumes:
+  - name: scripts
+    configMap:
+      name: otel-elasticsearch-setup
+  - name: work
+    emptyDir: {}
+  {{- if .esTls }}
+  - name: es-ca
+    secret:
+      secretName: {{ .esName }}-es-http-certs-public
+      items:
+        - key: ca.crt
+          path: ca.crt
+  {{- end }}
+{{- end }}
+
+{{- define "opsc.otelElasticsearchSetupScript" -}}
+#!/bin/bash
+set -euo pipefail
+ES="{{ ternary "https" "http" .esTls }}://{{ .esName }}-es-http.{{ .esNs }}.svc:9200"
+ES_HOST="{{ .esName }}-es-http.{{ .esNs }}.svc"
+GW_NS="{{ .gwNs }}"
+POLICY="opsc-otel-retention"
+REPLICAS="{{ .replicas }}"
+SA=/var/run/secrets/kubernetes.io/serviceaccount
+KAPI="https://kubernetes.default.svc"
+
+printf 'machine %s login elastic password %s\n' "$ES_HOST" "$ELASTIC_PASSWORD" > /work/netrc
+printf 'Authorization: Bearer %s\n' "$(cat "$SA/token")" > /work/kauth
+TLS=()
+if [ -f /es-ca/ca.crt ]; then TLS=(--cacert /es-ca/ca.crt); fi
+es()   { curl -sS --fail-with-body "${TLS[@]}" --netrc-file /work/netrc "$@"; }
+kube() { curl -sS --cacert "$SA/ca.crt" -H @/work/kauth "$@"; }
+
+# Bounded to about 10 minutes, inside the opsc release's 15m timeout, so a
+# cluster that never comes up fails here with a reason rather than as a
+# release timeout.
+reachable=no
+for i in $(seq 1 30); do
+  if es "$ES/_cluster/health?wait_for_status=yellow&timeout=10s" >/dev/null 2>&1; then reachable=yes; break; fi
+  echo "waiting for Elasticsearch ($i)"; sleep 10
+done
+if [ "$reachable" != yes ]; then echo "Elasticsearch at $ES did not reach yellow in about 10 minutes"; exit 1; fi
+
+# ---- 1 and 2: retention and replicas ------------------------------------
+es -X PUT "$ES/_ilm/policy/$POLICY" -H 'Content-Type: application/json' -d '{
+  "policy": {"phases": {
+    "hot": {"actions": {"rollover": {
+      "max_age": "{{ .r.rolloverMaxAge }}",
+      "max_primary_shard_size": "{{ .r.rolloverMaxPrimaryShardSize }}"}}},
+    "delete": {"min_age": "{{ .r.deleteAfter }}", "actions": {"delete": {}}}}}}'
+echo
+for t in logs metrics traces; do
+  es -X PUT "$ES/_component_template/$t-otel@custom" -H 'Content-Type: application/json' \
+    -d "{\"template\": {\"settings\": {\"index\": {\"lifecycle\": {\"name\": \"$POLICY\"}, \"number_of_replicas\": $REPLICAS}}}}"
+  echo
+  if ! es "$ES/_index_template/$t-otel@template" | grep -q "\"$t-otel@custom\""; then
+    echo "REFUSING: $t-otel@template does not compose $t-otel@custom, so retention would not apply"
+    exit 1
+  fi
+  echo "$t-otel@template composes $t-otel@custom: retention {{ .r.deleteAfter }}, replicas $REPLICAS"
+done
+es -X PUT "$ES/traces-*.otel-*,metrics-*.otel-*,logs-*.otel-*/_settings?allow_no_indices=true&expand_wildcards=all" \
+  -H 'Content-Type: application/json' -d "{\"index\": {\"number_of_replicas\": $REPLICAS}}"
+echo
+
+# ---- 3: the gateway's API key -------------------------------------------
+SECRET_URL="$KAPI/api/v1/namespaces/$GW_NS/secrets/otel-gateway-elasticsearch"
+status=$(kube -o /work/secret.json -w '%{http_code}' "$SECRET_URL")
+valid=no
+if [ "$status" = 200 ]; then
+  key_b64=$(sed -n 's/.*"api_key": *"\([^"]*\)".*/\1/p' /work/secret.json | head -1)
+  if [ -n "$key_b64" ]; then
+    printf 'Authorization: ApiKey %s\n' "$(printf '%s' "$key_b64" | base64 -d)" > /work/eskey
+    code=$(curl -sS -o /dev/null -w '%{http_code}' "${TLS[@]}" -H @/work/eskey "$ES/_security/_authenticate")
+    [ "$code" = 200 ] && valid=yes
+  fi
+fi
+
+ca_b64=""
+if [ -f /es-ca/ca.crt ]; then ca_b64=$(base64 -w0 < /es-ca/ca.crt); fi
+
+if [ "$valid" = yes ]; then
+  key_b64_new="$key_b64"
+  echo "the gateway's API key still authenticates; keeping it"
+else
+  es -X POST "$ES/_security/api_key" -H 'Content-Type: application/json' -d '{
+    "name": "otel-gateway",
+    "role_descriptors": {"otel_writer": {
+      "cluster": ["monitor"],
+      "indices": [{"names": ["traces-*", "logs-*", "metrics-*"],
+                   "privileges": ["auto_configure", "create_doc"]}]}},
+    "metadata": {"managed_by": "opsc"}}' > /work/key.json
+  encoded=$(sed -n 's/.*"encoded":"\([^"]*\)".*/\1/p' /work/key.json)
+  if [ -z "$encoded" ]; then echo "Elasticsearch returned no API key"; exit 1; fi
+  key_b64_new=$(printf '%s' "$encoded" | base64 -w0)
+  echo "created a new API key for the gateway"
+fi
+
+printf '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"otel-gateway-elasticsearch","namespace":"%s","labels":{"app.kubernetes.io/managed-by":"otel-elasticsearch-setup"}},"type":"Opaque","data":{"api_key":"%s","ca.crt":"%s"}}' \
+  "$GW_NS" "$key_b64_new" "$ca_b64" > /work/secret-new.json
+if [ "$status" = 200 ]; then
+  code=$(kube -o /work/out.json -w '%{http_code}' -X PUT -H 'Content-Type: application/json' --data-binary @/work/secret-new.json "$SECRET_URL")
+else
+  code=$(kube -o /work/out.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @/work/secret-new.json "$KAPI/api/v1/namespaces/$GW_NS/secrets")
+fi
+case "$code" in 200|201) echo "wrote $GW_NS/otel-gateway-elasticsearch" ;; *) echo "writing the Secret failed: HTTP $code"; exit 1 ;; esac
+
+if [ "$valid" != yes ]; then
+  patch="{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"opsc/elasticsearch-key-rotated-at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}}}}"
+  code=$(kube -o /dev/null -w '%{http_code}' -X PATCH -H 'Content-Type: application/strategic-merge-patch+json' \
+    --data "$patch" "$KAPI/apis/apps/v1/namespaces/$GW_NS/deployments/otel-gateway")
+  echo "restart of $GW_NS/otel-gateway requested: HTTP $code (404 means it has not been created yet)"
+fi
+{{- end }}
