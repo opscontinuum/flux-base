@@ -52,11 +52,16 @@ ports:
       default: true
     protocol: TCP
     {{- if .Values.httpsRedirect }}
-    # Traefik v34 redirect syntax
+    # Traefik v34 redirect syntax. `permanent: true` -> 301, matching
+    # https://doc.traefik.io/traefik/v3.3/routing/entrypoints/
+    # (entryPoint.permanent defaults to true there too; set explicitly so
+    # this does not depend on that default holding across chart/Traefik
+    # version bumps).
     redirections:
       entryPoint:
         to: websecure
         scheme: https
+        permanent: true
     {{- end }}
   websecure:
     port: 443
@@ -90,11 +95,16 @@ ports:
       default: true
     protocol: TCP
     {{- if .Values.httpsRedirect }}
-    # Traefik v34 redirect syntax
+    # Traefik v34 redirect syntax. `permanent: true` -> 301, matching
+    # https://doc.traefik.io/traefik/v3.3/routing/entrypoints/
+    # (entryPoint.permanent defaults to true there too; set explicitly so
+    # this does not depend on that default holding across chart/Traefik
+    # version bumps).
     redirections:
       entryPoint:
         to: websecure
         scheme: https
+        permanent: true
     {{- end }}
   websecure:
     port: 8443
