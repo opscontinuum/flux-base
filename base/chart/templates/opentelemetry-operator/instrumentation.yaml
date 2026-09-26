@@ -10,6 +10,14 @@ after the operator CRDs are available.
 {{- if and .Values.opentelemetryOperator.enabled .Values.opentelemetryOperator.instrumentation.enabled }}
 {{- $apmSecretToken := .Values.opentelemetryOperator.instrumentation.elasticApm.secretToken }}
 {{- $apmServerUrl := .Values.opentelemetryOperator.instrumentation.elasticApm.serverUrl }}
+{{- /* With the gateway enabled, instrumentation sends to it, and the gateway
+       forwards to whichever destinations are enabled. Without it, straight to
+       APM Server, as before. */ -}}
+{{- $viaGateway := .Values.opentelemetryCollector.enabled }}
+{{- $endpoint := $apmServerUrl | default "http://apm-server.elastic-stack.svc:8200" }}
+{{- if $viaGateway }}
+{{- $endpoint = printf "http://otel-gateway.%s.svc:4317" .Values.opentelemetryCollector.namespace }}
+{{- end }}
 ---
 # ConfigMap containing the Instrumentation CR manifest
 apiVersion: v1
@@ -33,7 +41,7 @@ data:
         app.kubernetes.io/component: instrumentation
     spec:
       exporter:
-        endpoint: {{ $apmServerUrl | default "http://apm-server.elastic-stack.svc:8200" }}
+        endpoint: {{ $endpoint }}
       propagators:
         - tracecontext
         - baggage
@@ -42,14 +50,14 @@ data:
         addK8sUIDAttributes: true
       env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: {{ $apmServerUrl | default "http://apm-server.elastic-stack.svc:8200" }}
+          value: {{ $endpoint }}
         - name: OTEL_EXPORTER_OTLP_PROTOCOL
           value: grpc
         - name: OTEL_METRICS_EXPORTER
           value: otlp
         - name: OTEL_LOGS_EXPORTER
           value: otlp
-        {{- if $apmSecretToken }}
+        {{- if and $apmSecretToken (not $viaGateway) }}
         - name: OTEL_EXPORTER_OTLP_HEADERS
           value: "Authorization=Bearer {{ $apmSecretToken }}"
         {{- end }}
