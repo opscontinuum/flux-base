@@ -80,11 +80,40 @@ elasticStack:
         memory: 1Gi
         cpu: 500m
 
+# -----------------------------------------------------------------------------
+# GitLab and Argo CD — DISABLED FOR ANY CLUSTER WHERE ARGO CD ALREADY OWNS THEM
+# -----------------------------------------------------------------------------
+# 🔴 Before flipping these back to true, confirm the target cluster does not
+# already run its own GitLab and Argo CD under different ownership. On at
+# least one known deployment (dorkomen/harvester), Argo CD itself is
+# hand-applied (kubectl apply -k bootstrap/argocd, no Helm release) and
+# GitLab is an Argo CD-owned Application (charts/gitlab-omnibus). This
+# chart's argocd/gitlab sub-charts would render Deployments with the SAME
+# names into the SAME namespaces (argocd-server, argocd-repo-server, etc. are
+# conventional names most argo-helm-shaped charts share). Helm's own release
+# tracking has no way to know those resources are owned elsewhere: it would
+# either fail loudly on first install (an existing, unlabeled resource) or,
+# on an upgrade path that force-adopts, take ownership silently — and a
+# later Helm prune (this release scaling to 0, or the whole HelmRelease
+# disabling gitlab/argocd) deletes resources BY NAME, which means it deletes
+# the cluster's real Argo CD and/or GitLab, not a copy of them.
+#
+# Leave these false until a specific cluster's Argo CD and GitLab ownership
+# has been checked and is either genuinely absent or is itself the flux-base
+# release being adopted. See opscontinuum/devsecops-planning's ecosystem
+# cutover plan for the staged verification this depends on.
 gitlab:
-  enabled: true
+  enabled: false
 
 argocd:
-  enabled: true
+  enabled: false
+
+# base/chart/values.yaml documents this with "same reasoning as gitlab.enabled":
+# a namespace literally named "gitlab-runner" already exists on at least one
+# known deployment, owned by a separate GitOps controller. Disabled here for
+# the same reason gitlab/argocd are above.
+gitlabRunner:
+  enabled: false
 
 n8n:
   enabled: true
