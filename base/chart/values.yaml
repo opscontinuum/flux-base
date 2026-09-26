@@ -1072,7 +1072,9 @@ opentelemetryOperator:
 # time rather than deploying a gateway that sends nowhere.
 #
 # When this is enabled, opentelemetryOperator.instrumentation sends to the
-# gateway instead of straight to APM Server.
+# gateway instead of straight to APM Server. The instrumentation exports
+# traces, metrics and logs, so the render refuses a gateway that has no
+# destination for one of them: those signals would be rejected and lost.
 opentelemetryCollector:
   enabled: false
 
@@ -1092,18 +1094,27 @@ opentelemetryCollector:
     repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
     tag: "0.158.0"
 
-  flux: {}
+  # The gateway waits for its Elasticsearch Secret on a fresh install, so it
+  # gets the same window the Elasticsearch setup has.
+  flux:
+    timeout: 15m
   postRenderers: []
+
+  # Extra environment for the gateway, appended to what the chart sets itself
+  # (the Elasticsearch key). Use this, not values.extraEnvs, which would
+  # replace that list instead of adding to it. Destination headers can read
+  # these as ${env:NAME}.
+  extraEnvs: []
 
   destinations:
     # Elasticsearch deployed by elasticStack, written in Elastic's OTel-native
     # layout (traces-*.otel-*, metrics-*.otel-*, logs-*.otel-*). Requires
     # elasticStack.enabled. Everything it needs is set up in-cluster, with no
     # manual step: a setup job uses ECK's own elastic user to create an API key
-    # that may only auto-create and append to those data streams, hands it and
-    # the cluster CA to the gateway, and gives the streams a retention (they
-    # have none by default and would otherwise fill the volume). A CronJob
-    # re-asserts all of it, so a rebuilt Elasticsearch gets it back.
+    # that may only auto-create and append to the *.otel-* data streams, hands
+    # it and the cluster CA to the gateway, and gives the streams a retention
+    # (they have none by default and would otherwise fill the volume). A
+    # CronJob re-asserts all of it, so a rebuilt Elasticsearch gets it back.
     elasticsearch:
       enabled: false
       signals: [traces, metrics, logs]
@@ -1117,22 +1128,26 @@ opentelemetryCollector:
       replicas: ""
       # How often the CronJob re-asserts retention and re-checks the API key.
       reassertSchedule: "17 */6 * * *"
-
-    # APM Server deployed by elasticStack, over OTLP gRPC. The Elastic-native
-    # path (traces-apm* and friends), and the one Kibana's APM app is built
-    # around. Requires elasticStack.enabled and elasticStack.apmServer.enabled.
-    apmServer:
-      enabled: false
-      signals: [traces, metrics, logs]
+      # The API key expires after keyLifetimeDays and is replaced once it has
+      # rotateWithinDays or fewer left, so the gateway never holds an expired
+      # key. Keep rotateWithinDays well above the reassertSchedule interval.
+      # Replaced keys stay valid until they expire, which covers the rollout
+      # while old gateway pods still use them; keys that no Secret refers to
+      # are invalidated after an hour.
+      keyLifetimeDays: 30
+      rotateWithinDays: 7
 
     # Any OTLP backend, one entry each: Tempo, Loki or Prometheus (each accepts
-    # OTLP natively), a vendor's OTLP endpoint, or another collector.
+    # OTLP natively), a vendor's OTLP endpoint, or another collector. Elastic
+    # APM Server is one too, but ECK requires its secret token on every
+    # request: put the token in extraEnvs from ECK's <name>-apm-token Secret
+    # and send it as a header, or APM Server rejects whole batches.
     #   name:      becomes the exporter name, otlp/<name> or otlphttp/<name>
     #   protocol:  grpc (host:port) or http (a base URL)
     #   signals:   any of traces, metrics, logs
     #   insecure:  true for plaintext inside the cluster
     #   headers:   optional; values may reference env vars declared in
-    #              values.extraEnvs, e.g. "Bearer ${env:VENDOR_TOKEN}"
+    #              extraEnvs above, e.g. "Bearer ${env:VENDOR_TOKEN}"
     # Examples, all off:
     #   - name: tempo
     #     protocol: grpc
